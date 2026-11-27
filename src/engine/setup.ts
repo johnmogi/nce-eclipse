@@ -5,9 +5,11 @@ import {
   finalizeState,
   makeEvent
 } from './event-helpers.js';
+import { isEligibleEvolution } from './evolution.js';
 import {
   drawNextMinorRoutingMajors,
   isMajorCard,
+  placeDrawnMajorOnBoard,
   type MajorMutableBoard
 } from './majors.js';
 import { createReadingForTurn } from './readings.js';
@@ -156,25 +158,31 @@ export function createGame(
     })
   ];
 
-  // Deal starting hands: Minors only (Majors/Courts stay in Deck of Days to enter via Board!)
+  // Deal starting hands: Minors only (Majors/Courts stay in Deck of Days to enter via Board!).
+  // Stage R1 (RD-01): When preventSetupEvolution is enabled, also skip any Minor that would
+  // immediately consume itself evolving the starting Ace so every player starts Turn 1 with 3 playable cards.
   for (let i = 0; i < players.length; i++) {
     const dealt: string[] = [];
     if (options.overrideHands?.[i]) {
       dealt.push(...options.overrideHands[i]!);
     } else {
-      const skippedMajors: string[] = [];
+      const skippedCards: string[] = [];
       while (dealt.length < ruleset.startingHandSize && days.length > 0) {
         const candidateId = days.shift()!;
         const candidate = catalog[candidateId]!;
-        if (ruleset.features.majors && isMajorCard(candidate)) {
-          skippedMajors.push(candidateId);
+        const skipMajor = ruleset.features.majors && isMajorCard(candidate);
+        const skipSetupEvo =
+          Boolean(ruleset.preventSetupEvolution) &&
+          isEligibleEvolution(players[i]!.lineage, candidate, ruleset);
+        if (skipMajor || skipSetupEvo) {
+          skippedCards.push(candidateId);
         } else {
           dealt.push(candidateId);
         }
       }
-      if (skippedMajors.length > 0) {
-        // Re-insert any skipped Majors cleanly into Days deterministically
-        const recombined = [...skippedMajors, ...days];
+      if (skippedCards.length > 0) {
+        // Re-insert any skipped Majors / Turn-0 evolving cards cleanly into Days deterministically
+        const recombined = [...skippedCards, ...days];
         const reshuffled = deterministicShuffle(recombined, rngState);
         rngState = reshuffled.nextState;
         days.splice(0, days.length, ...reshuffled.shuffled);
@@ -331,6 +339,48 @@ export function createGame(
     }
   }
 
+  // Stage R1 (RD-15 AGREED): Unless emptyChamberMode is enabled, Turn 1 populates ALL 3 Board slots
+  // (Event, Center, AND Right Parallel Dimension) so the third chamber is never left artificially empty.
+  if (
+    !comboOutcome &&
+    !ruleset.emptyChamberMode &&
+    majorBoardCtx.boardParallel.length === 0 &&
+    majorBoardCtx.days.length > 0 &&
+    ruleset.boardOccupancyLimits.parallel >= 1
+  ) {
+    const rightId = majorBoardCtx.days.shift()!;
+    const rightCard = catalog[rightId]!;
+    if (ruleset.features.majors && isMajorCard(rightCard)) {
+      comboOutcome = placeDrawnMajorOnBoard(majorBoardCtx, rightId, 'turn-setup');
+    } else {
+      majorBoardCtx.boardParallel.push(rightId);
+      events.push(
+        makeEvent(nextSeq(), 1, 1, initialOpenPhase, ruleset.version, {
+          actor: 'system',
+          type: 'CardMoved',
+          affectedCardIds: [],
+          source: 'turn-setup',
+          reason: 'populate-parallel-concealed',
+          visibility: 'public',
+          summary: `Turn 1 Right chamber populated face-down (${rightCard.backGroup} back).`,
+          payload: { from: 'days', to: 'parallel', concealed: true, backGroup: rightCard.backGroup }
+        })
+      );
+      events.push(
+        makeEvent(nextSeq(), 1, 1, initialOpenPhase, ruleset.version, {
+          actor: 'system',
+          type: 'CardMoved',
+          affectedCardIds: [rightId],
+          source: 'turn-setup',
+          reason: 'populate-parallel-admin-detail',
+          visibility: 'admin_only',
+          summary: `[Admin] Turn 1 concealed Right chamber card is ${rightCard.label}.`,
+          payload: { from: 'days', to: 'parallel', cardId: rightId }
+        })
+      );
+    }
+  }
+
   const outcome =
     comboOutcome ?? evaluateCompletion(players, majorBoardCtx.days, majorBoardCtx.boardCenter, ruleset);
 
@@ -399,6 +449,7 @@ export function createGame(
     discardedCenterThisTurn: false,
     currentReading,
     readingHistory: [],
+    pendingEarthReorder: null,
     majorPending: majorBoardCtx.majorPending,
     players,
     activeEffects: [],

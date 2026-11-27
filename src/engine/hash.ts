@@ -35,6 +35,7 @@ export function computeStateHash(state: Omit<GameState, 'stateHash'>): string {
     discardedCenterThisTurn: state.discardedCenterThisTurn,
     currentReading: state.currentReading,
     readingHistory: state.readingHistory,
+    pendingEarthReorder: state.pendingEarthReorder ?? null,
     majorPending: state.majorPending,
     players: state.players.map((p) => ({
       id: p.id,

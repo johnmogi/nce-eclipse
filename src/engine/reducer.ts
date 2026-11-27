@@ -1,4 +1,6 @@
 import {
+  canSpendReaderBonusInPhase,
+  computeElementalStrength,
   expireUnusedReaderBonuses,
   getAvailableReaderBonusesForTurn,
   validateAndExecuteElementalEffect,
@@ -18,6 +20,7 @@ import {
   drawNextMinorRoutingMajors,
   evaluateCombos,
   isMajorCard,
+  placeDrawnMajorOnBoard,
   type MajorMutableBoard
 } from './majors.js';
 import {
@@ -39,6 +42,7 @@ import type {
   GamePhase,
   GameState,
   MajorPendingEntry,
+  PendingEarthReorderState,
   PlayerState,
   ReadingRecord,
   Ruleset,
@@ -59,6 +63,8 @@ const FUTURE_FEATURE_COMMANDS: Readonly<
   DeclineAbandonedCard: { flag: 'barriersAndTrials', label: 'Event Realities (Milestone C / Level 1.3)' },
   UseElementalEffect: { flag: 'elementalEffects', label: 'Elemental Hand Effects (Milestone D1)' },
   UseReaderBonus: { flag: 'elementalEffects', label: 'Reader Bonus Elemental Action (Milestone D1)' },
+  StartEarthPeek: { flag: 'elementalEffects', label: 'Earth Immediate Future Peek (Stage R1)' },
+  CommitEarthReorder: { flag: 'elementalEffects', label: 'Earth Deliberate Reorder (Stage R1)' },
   AdvanceToReading: { flag: 'elementalEffects', label: 'Pre-Reading Elemental Prep (Milestone E)' },
   ProposeTrade: { flag: 'tradingMarket', label: 'Trading Market (Milestone D2)' },
   AcceptTrade: { flag: 'tradingMarket', label: 'Trading Market (Milestone D2)' },
@@ -145,6 +151,9 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
   let rngState = state.rngState;
   let currentReading: ReadingRecord | null = state.currentReading ? { ...state.currentReading } : null;
   const readingHistory: ReadingRecord[] = [...state.readingHistory];
+  let pendingEarthReorder: PendingEarthReorderState | null = state.pendingEarthReorder
+    ? { ...state.pendingEarthReorder, peekedCardIds: [...state.pendingEarthReorder.peekedCardIds] }
+    : null;
   let phase: GamePhase = state.phase;
   let turn = state.turn;
   let round = state.round;
@@ -262,6 +271,51 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
         })
       );
     }
+    return false;
+  };
+
+  const populateParallelSlotFromDays = (source: string): boolean => {
+    if (
+      state.ruleset.emptyChamberMode ||
+      boardParallel.length > 0 ||
+      days.length === 0 ||
+      state.ruleset.boardOccupancyLimits.parallel < 1
+    ) {
+      return false;
+    }
+    const rightId = days.shift()!;
+    const rightCard = state.cards[rightId]!;
+    if (state.ruleset.features.majors && isMajorCard(rightCard)) {
+      const mctx = makeMajorBoardCtx();
+      const outcome = placeDrawnMajorOnBoard(mctx, rightId, source);
+      syncFromMajorBoardCtx(mctx);
+      return applyComboOutcomeIfAny(outcome, source);
+    }
+    boardParallel.push(rightId);
+    newEvents.push(
+      makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
+        actor: 'system',
+        type: 'CardMoved',
+        affectedCardIds: [],
+        source,
+        reason: 'populate-parallel-concealed',
+        visibility: 'public',
+        summary: `Turn ${turn} Right chamber populated face-down (${rightCard.backGroup} back).`,
+        payload: { from: 'days', to: 'parallel', concealed: true, backGroup: rightCard.backGroup }
+      })
+    );
+    newEvents.push(
+      makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
+        actor: 'system',
+        type: 'CardMoved',
+        affectedCardIds: [rightId],
+        source,
+        reason: 'populate-parallel-admin-detail',
+        visibility: 'admin_only',
+        summary: `[Admin] Turn ${turn} concealed Right chamber card is ${rightCard.label}.`,
+        payload: { from: 'days', to: 'parallel', cardId: rightId }
+      })
+    );
     return false;
   };
 
@@ -699,7 +753,7 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
       const discardedCard = state.cards[discardedId]!;
       const adviceFollowed = currentReading.advice === 'bad';
       centerRevealed = true;
-      discardedCenterThisTurn = true;
+      discardedCenterThisTurn = !state.ruleset.replaceCenterOnDiscard;
       veil.push(discardedId);
 
       const updatedReading: ReadingRecord = {
@@ -716,7 +770,7 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
           source: 'DiscardCenter',
           reason: adviceFollowed ? 'followed-bad-advice' : 'discarded-despite-good-advice',
           visibility: 'public',
-          summary: `${activePlayer.name} chose to DISCARD Center → ${discardedCard.label} revealed in the Veil (advice was "${updatedReading.advice?.toUpperCase()}", ${updatedReading.adviceTruthful ? 'truthful' : 'deceptive'}).`,
+          summary: `${activePlayer.name} rejected Center → ${discardedCard.label} revealed in the Veil (advice was "${updatedReading.advice?.toUpperCase()}", ${updatedReading.adviceTruthful ? 'truthful' : 'deceptive'}).`,
           payload: {
             advice: updatedReading.advice,
             playerAction: 'discard',
@@ -741,7 +795,73 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
         nextSeq
       });
       currentReading = null;
-      phase = resolvePostEncounterPhase();
+
+      // Stage R1 (RD-04 AGREED): Rejecting the read Center card draws & flips a fresh replacement card
+      // AND flips Left Event to determine Treasure / Barrier / Trial so the player never loses their turn!
+      if (state.ruleset.replaceCenterOnDiscard) {
+        let replacementId: string | null = null;
+        if (days.length > 0) {
+          const mctx = makeMajorBoardCtx();
+          const drawRep = drawNextMinorRoutingMajors(mctx, 'center', 'DiscardCenter-replacement');
+          syncFromMajorBoardCtx(mctx);
+          if (applyComboOutcomeIfAny(drawRep.outcome, 'DiscardCenter-replacement')) {
+            break;
+          }
+          replacementId = drawRep.minorCardId;
+        }
+
+        if (replacementId) {
+          const replacementCard = state.cards[replacementId]!;
+          boardCenter.push(replacementId);
+          centerRevealed = true;
+
+          newEvents.push(
+            makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
+              actor: activePlayer.id,
+              type: 'CardMoved',
+              affectedCardIds: [replacementId],
+              source: 'DiscardCenter',
+              reason: 'replacement-after-reject',
+              visibility: 'public',
+              summary: `${activePlayer.name} drew and flipped replacement Center card: ${replacementCard.label} (${replacementCard.vp} VP).`,
+              payload: { from: 'days', to: 'center', replacement: true }
+            })
+          );
+
+          if (state.ruleset.features.barriersAndTrials && boardEvent.length > 0) {
+            const eventId = boardEvent[0]!;
+            const eventCard = state.cards[eventId]!;
+            eventRevealed = true;
+            const reality = eventCardToReality(eventCard);
+            phase = 'AWAITING_EVENT_RESOLUTION';
+
+            newEvents.push(
+              makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
+                actor: 'system',
+                type: 'EventRevealed',
+                affectedCardIds: [eventId],
+                source: 'DiscardCenter',
+                reason: `left-event-${reality}`,
+                visibility: 'public',
+                summary: `Left Event revealed for replacement card: ${eventCard.label} (${eventCard.vp} VP) → ${reality.toUpperCase()}!`,
+                payload: {
+                  eventCardId: eventId,
+                  eventVP: eventCard.vp,
+                  eventElement: eventCard.element ?? null,
+                  reality
+                }
+              })
+            );
+          } else {
+            claimCenterAndEvolve('DiscardCenter-replacement');
+            phase = resolvePostEncounterPhase();
+          }
+        } else {
+          phase = resolvePostEncounterPhase();
+        }
+      } else {
+        phase = resolvePostEncounterPhase();
+      }
       break;
     }
 
@@ -1107,14 +1227,324 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
       }
       syncFromElementalContext(ctx);
       if (!runComboCheck('UseReaderBonus')) {
+        if (state.phase === 'AWAITING_ELEMENTAL_ACTION') {
+          if (state.ruleset.elementalTiming === 'before_reading') {
+            const currentActive = players[state.activePlayerIndex]!;
+            if (currentActive.effectUsedThisTurn) {
+              enterReadingOrAbandonedPhase('UseReaderBonus');
+            }
+          } else {
+            phase = resolvePostEncounterPhase();
+          }
+        } else if (state.phase === 'AWAITING_READING_DECISION' && boardCenter.length === 0) {
+          // If the player burned/shuffled/repositioned the Center card mid-reading via Reader Bonus, refill or finish cleanly
+          currentReading = null;
+          enterReadingOrAbandonedPhase('UseReaderBonus');
+        } else if (state.phase === 'AWAITING_ABANDONED_CHOICE' && boardCenter.length === 0) {
+          enterReadingOrAbandonedPhase('UseReaderBonus');
+        }
+      }
+      break;
+    }
+
+    case 'StartEarthPeek': {
+      const isBonus = Boolean(command.bonusId);
+      if (isBonus) {
+        if (!canSpendReaderBonusInPhase(state.phase, state.ruleset)) {
+          return fail(state, command, {
+            code: 'INVALID_PHASE',
+            message: `Cannot use an Earth Reader Bonus during phase ${state.phase}.`
+          });
+        }
+      } else if (state.phase !== 'AWAITING_ELEMENTAL_ACTION') {
+        return fail(state, command, {
+          code: 'INVALID_PHASE',
+          message: `Earth hand card peek is only valid during AWAITING_ELEMENTAL_ACTION (current: ${state.phase}).`
+        });
+      }
+
+      if (days.length < 2) {
+        return fail(state, command, {
+          code: 'INSUFFICIENT_TARGET_CARDS',
+          message: 'Deck of Days needs at least 2 cards to inspect and reorder the Immediate Future.'
+        });
+      }
+
+      let strength = 1;
+      let sourceCommand: 'UseElementalEffect' | 'UseReaderBonus' = 'UseElementalEffect';
+      let sourceCardId: string | null = null;
+      let bonusId: string | null = null;
+
+      if (isBonus && command.bonusId) {
+        if (state.ruleset.readerBonusPolicy === 'record_only') {
+          return fail(state, command, {
+            code: 'FEATURE_DISABLED',
+            message: 'Reader bonus spending is disabled in this ruleset.'
+          });
+        }
+        if (state.ruleset.readerBonusConsumesTurnAction && activePlayer.effectUsedThisTurn) {
+          return fail(state, command, {
+            code: 'EFFECT_ALREADY_USED_THIS_TURN',
+            message: `${activePlayer.name} has already used their elemental action this turn.`
+          });
+        }
+        const bonusIdx = activePlayer.pendingReaderBonuses.findIndex((b) => b.id === command.bonusId);
+        const bonus = bonusIdx >= 0 ? activePlayer.pendingReaderBonuses[bonusIdx] : undefined;
+        if (!bonus || bonus.status !== 'available' || bonus.earnedOnTurn >= turn) {
+          return fail(state, command, {
+            code: 'NO_AVAILABLE_READER_BONUS',
+            message: `Reader bonus "${command.bonusId}" is not available.`
+          });
+        }
+        if (bonus.sourceElement !== 'earth') {
+          return fail(state, command, {
+            code: 'ELEMENT_MISMATCH',
+            message: `Reader bonus "${bonus.id}" is ${bonus.sourceElement ?? 'none'}, not earth.`
+          });
+        }
+
+        // Consume bonus atomically BEFORE revealing Immediate Future cards (cheat-proof!)
+        const updatedBonuses = activePlayer.pendingReaderBonuses.map((b, idx) =>
+          idx === bonusIdx ? { ...b, status: 'consumed' as const, consumedOnTurn: turn } : b
+        );
+        players[state.activePlayerIndex] = {
+          ...activePlayer,
+          pendingReaderBonuses: updatedBonuses,
+          effectUsedThisTurn: state.ruleset.readerBonusConsumesTurnAction
+            ? true
+            : activePlayer.effectUsedThisTurn
+        };
+        sourceCommand = 'UseReaderBonus';
+        bonusId = bonus.id;
+        strength = 1;
+
+        newEvents.push(
+          makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
+            actor: activePlayer.id,
+            type: 'ReaderBonusConsumed',
+            affectedCardIds: [bonus.sourceCardId],
+            source: 'StartEarthPeek',
+            reason: state.ruleset.readerBonusPolicy,
+            visibility: 'public',
+            summary: `${activePlayer.name} spent Earth Reader Bonus (Tier 1 · 0 hand cost) to inspect the Immediate Future.`,
+            payload: { bonusId: bonus.id, element: 'earth', strength: 1 }
+          })
+        );
+      } else if (command.sourceCardId) {
+        if (activePlayer.effectUsedThisTurn) {
+          return fail(state, command, {
+            code: 'EFFECT_ALREADY_USED_THIS_TURN',
+            message: `${activePlayer.name} has already used an elemental action this turn.`
+          });
+        }
+        if (!activePlayer.hand.includes(command.sourceCardId)) {
+          return fail(state, command, {
+            code: 'CARD_NOT_IN_HAND',
+            message: `Card "${command.sourceCardId}" is not in ${activePlayer.id}'s hand.`
+          });
+        }
+        const sourceCard = state.cards[command.sourceCardId];
+        if (!sourceCard || sourceCard.element !== 'earth') {
+          return fail(state, command, {
+            code: 'ELEMENT_MISMATCH',
+            message: `Card "${command.sourceCardId}" is not an Earth card.`
+          });
+        }
+        const computed = computeElementalStrength(activePlayer, sourceCard, state.ruleset);
+        strength = computed.strength;
+        sourceCardId = sourceCard.id;
+
+        // Consume hand card -> Veil atomically BEFORE revealing cards (cheat-proof!)
+        players[state.activePlayerIndex] = {
+          ...activePlayer,
+          hand: activePlayer.hand.filter((id) => id !== sourceCard.id),
+          effectUsedThisTurn: true
+        };
+        veil.push(sourceCard.id);
+
+        newEvents.push(
+          makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
+            actor: activePlayer.id,
+            type: 'ElementalEffectActivated',
+            affectedCardIds: [sourceCard.id],
+            source: 'StartEarthPeek',
+            reason: 'activate-earth-peek',
+            visibility: 'public',
+            summary: `${activePlayer.name} activated Earth (♦) using ${sourceCard.label} (strength ${strength}) to inspect the Immediate Future.`,
+            payload: { element: 'earth', sourceCardId: sourceCard.id, strength }
+          })
+        );
+        newEvents.push(
+          makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
+            actor: activePlayer.id,
+            type: 'CardMoved',
+            affectedCardIds: [sourceCard.id],
+            source: 'StartEarthPeek',
+            reason: 'elemental-activation-cost',
+            visibility: 'public',
+            summary: `${sourceCard.label} consumed from ${activePlayer.name}'s hand into the Veil.`,
+            payload: { from: 'hand', to: 'veil' }
+          })
+        );
+      } else {
+        return fail(state, command, {
+          code: 'INVALID_CARD',
+          message: 'StartEarthPeek requires either sourceCardId or bonusId.'
+        });
+      }
+
+      const peekCount = Math.min(strength, days.length);
+      const peekedCardIds = days.slice(0, peekCount);
+      pendingEarthReorder = {
+        playerId: activePlayer.id,
+        sourceCommand,
+        sourceCardId,
+        bonusId,
+        strength,
+        peekedCardIds,
+        returnPhase: state.phase
+      };
+      phase = 'AWAITING_EARTH_REORDER';
+
+      newEvents.push(
+        makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
+          actor: activePlayer.id,
+          type: 'EarthPeekStarted',
+          affectedCardIds: [],
+          source: 'StartEarthPeek',
+          reason: 'earth-private-peek',
+          visibility: 'public',
+          summary: `${activePlayer.name} privately inspected the top ${peekCount} card${peekCount === 1 ? '' : 's'} of the Immediate Future.`,
+          payload: { count: peekCount, strength }
+        })
+      );
+      newEvents.push(
+        makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
+          actor: activePlayer.id,
+          type: 'EarthPeekStarted',
+          affectedCardIds: peekedCardIds,
+          source: 'StartEarthPeek',
+          reason: 'earth-private-peek-admin',
+          visibility: 'admin_only',
+          summary: `[Admin] ${activePlayer.name} peeked at Immediate Future: ${peekedCardIds.map((id) => state.cards[id]!.label).join(', ')}.`,
+          payload: { peekedCardIds }
+        })
+      );
+      break;
+    }
+
+    case 'CommitEarthReorder': {
+      if (state.phase !== 'AWAITING_EARTH_REORDER' || !pendingEarthReorder) {
+        return fail(state, command, {
+          code: 'INVALID_PHASE',
+          message: 'No active Earth reorder session to commit.'
+        });
+      }
+      if (pendingEarthReorder.playerId !== command.playerId) {
+        return fail(state, command, {
+          code: 'NOT_ACTIVE_PLAYER',
+          message: `Only ${pendingEarthReorder.playerId} can commit this Earth reorder.`
+        });
+      }
+
+      const { peekedCardIds, strength, sourceCommand, sourceCardId, bonusId, returnPhase } =
+        pendingEarthReorder;
+
+      if (command.moveTopToBottom) {
+        const moved = days.shift()!;
+        days.push(moved);
+        newEvents.push(
+          makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
+            actor: activePlayer.id,
+            type: 'CardMoved',
+            affectedCardIds: [],
+            source: 'CommitEarthReorder',
+            reason: 'earth-reposition-days-to-bottom',
+            visibility: 'public',
+            summary: `${activePlayer.name} deliberately moved the Next Upcoming card of Deck of Days to the bottom.`,
+            payload: { from: 'days', to: 'days', placement: 'bottom', count: 1 }
+          })
+        );
+        newEvents.push(
+          makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
+            actor: activePlayer.id,
+            type: 'ElementalEffectResolved',
+            affectedCardIds: [],
+            source: sourceCommand,
+            reason: 'earth-days_to_bottom',
+            visibility: 'public',
+            summary: `${activePlayer.name} resolved Earth (Reorder · strength ${strength}, moved Next Upcoming → bottom).`,
+            payload: { element: 'earth', strength, mode: 'days_to_bottom', sourceCardId, bonusId }
+          })
+        );
+      } else {
+        const newOrder = command.newOrder ?? peekedCardIds;
+        if (
+          newOrder.length !== peekedCardIds.length ||
+          new Set(newOrder).size !== peekedCardIds.length ||
+          !peekedCardIds.every((id) => newOrder.includes(id))
+        ) {
+          return fail(state, command, {
+            code: 'INVALID_REORDER_SPEC',
+            message: 'Earth newOrder must be an exact permutation of the inspected Immediate Future cards.'
+          });
+        }
+        days = [...newOrder, ...days.slice(peekedCardIds.length)];
+        newEvents.push(
+          makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
+            actor: activePlayer.id,
+            type: 'CardMoved',
+            affectedCardIds: [],
+            source: 'CommitEarthReorder',
+            reason: 'earth-reorder-days',
+            visibility: 'public',
+            summary: `${activePlayer.name} deliberately arranged the top ${peekedCardIds.length} card${peekedCardIds.length === 1 ? '' : 's'} of the Immediate Future.`,
+            payload: { zone: 'days', count: peekedCardIds.length }
+          })
+        );
+        newEvents.push(
+          makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
+            actor: activePlayer.id,
+            type: 'CardMoved',
+            affectedCardIds: newOrder,
+            source: 'CommitEarthReorder',
+            reason: 'earth-reorder-days-admin',
+            visibility: 'admin_only',
+            summary: `[Admin] Earth arranged Immediate Future to: ${newOrder.map((id) => state.cards[id]!.label).join(' → ')}.`,
+            payload: { newOrder }
+          })
+        );
+        newEvents.push(
+          makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
+            actor: activePlayer.id,
+            type: 'ElementalEffectResolved',
+            affectedCardIds: [],
+            source: sourceCommand,
+            reason: 'earth-days_reorder',
+            visibility: 'public',
+            summary: `${activePlayer.name} resolved Earth (Reorder · strength ${strength}, arranged top ${peekedCardIds.length} of Immediate Future).`,
+            payload: { element: 'earth', strength, mode: 'days_reorder', sourceCardId, bonusId }
+          })
+        );
+      }
+
+      pendingEarthReorder = null;
+      if (returnPhase === 'AWAITING_ELEMENTAL_ACTION') {
         if (state.ruleset.elementalTiming === 'before_reading') {
           const currentActive = players[state.activePlayerIndex]!;
-          if (currentActive.effectUsedThisTurn) {
-            enterReadingOrAbandonedPhase('UseReaderBonus');
+          const hasExtraBonus =
+            !state.ruleset.readerBonusConsumesTurnAction &&
+            getAvailableReaderBonusesForTurn(currentActive, turn, state.ruleset).length > 0;
+          if (currentActive.effectUsedThisTurn && !hasExtraBonus) {
+            enterReadingOrAbandonedPhase('CommitEarthReorder');
+          } else {
+            phase = 'AWAITING_ELEMENTAL_ACTION';
           }
         } else {
           phase = resolvePostEncounterPhase();
         }
+      } else {
+        phase = returnPhase;
       }
       break;
     }
@@ -1225,9 +1655,62 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
               ? 'AWAITING_ELEMENTAL_ACTION'
               : 'AWAITING_ABANDONED_CHOICE';
             currentReading = null;
+          } else if (boardCenter.length === 0 && !state.ruleset.emptyChamberMode && boardParallel.length > 0 && !isMajorCard(state.cards[boardParallel[0]!])) {
+            // Stage R1 (RD-15): Slide concealed Minor from Right chamber -> Center, then refill Right from Days!
+            const slidId = boardParallel.shift()!;
+            const slidCard = state.cards[slidId]!;
+            boardCenter.push(slidId);
+            centerRevealed = !state.ruleset.features.readings;
+            const reader = players[(activePlayerIndex + 1) % players.length]!;
+            if (!state.ruleset.features.readings) {
+              currentReading = null;
+              phase = 'AWAITING_CENTER_DECISION';
+            } else if (preReadingElemental) {
+              currentReading = null;
+              phase = 'AWAITING_ELEMENTAL_ACTION';
+            } else {
+              currentReading = createReadingForTurn(
+                players,
+                activePlayerIndex,
+                slidCard,
+                turn,
+                round,
+                state.ruleset
+              );
+              phase = 'AWAITING_READING';
+            }
+            newEvents.push(
+              makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
+                actor: 'system',
+                type: 'CardMoved',
+                affectedCardIds: [],
+                source: 'turn-refill',
+                reason: 'slide-parallel-to-center',
+                visibility: 'public',
+                summary: preReadingElemental
+                  ? `Turn ${turn}: Right chamber card slid into Center (${slidCard.backGroup} back). Optional Elemental Prep open before Reading.`
+                  : `Turn ${turn}: Right chamber card slid into Center (${slidCard.backGroup} back). Waiting for ${reader.name}'s reading.`,
+                payload: { from: 'parallel', to: 'center', concealed: !centerRevealed }
+              })
+            );
+            newEvents.push(
+              makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
+                actor: 'system',
+                type: 'CardMoved',
+                affectedCardIds: [slidId],
+                source: 'turn-refill',
+                reason: 'slide-parallel-to-center-admin',
+                visibility: 'admin_only',
+                summary: `[Admin] Turn ${turn} slid ${slidCard.label} from Right chamber to Center.`,
+                payload: { from: 'parallel', to: 'center', cardId: slidId }
+              })
+            );
+            populateParallelSlotFromDays('turn-refill');
           } else if (boardCenter.length === 0 && days.length > 0) {
             if (state.ruleset.features.readings) {
-              dealFreshConcealedCenterForReading('turn-refill', preReadingElemental);
+              if (!dealFreshConcealedCenterForReading('turn-refill', preReadingElemental)) {
+                populateParallelSlotFromDays('turn-refill');
+              }
             } else {
               const nextCenterId = days.shift()!;
               boardCenter.push(nextCenterId);
@@ -1246,6 +1729,7 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
                   payload: { from: 'days', to: 'center' }
                 })
               );
+              populateParallelSlotFromDays('turn-refill');
             }
           } else {
             const postOutcome = evaluateCompletion(players, days, boardCenter, state.ruleset);
@@ -1342,6 +1826,7 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
     discardedCenterThisTurn,
     currentReading,
     readingHistory,
+    pendingEarthReorder,
     majorPending,
     players,
     status: outcome ? 'completed' : 'playing',

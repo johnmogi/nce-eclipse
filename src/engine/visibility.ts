@@ -1,4 +1,8 @@
-import { getAvailableReaderBonusesForTurn } from './elemental-effects.js';
+import {
+  canSpendReaderBonusInPhase,
+  getAvailableReaderBonusesForTurn
+} from './elemental-effects.js';
+import { isMajorCard } from './majors.js';
 import { eventCardToReality } from './reconciliation.js';
 import type {
   Card,
@@ -8,6 +12,7 @@ import type {
   GameEvent,
   GameState,
   ProjectedBoardSlotItem,
+  ProjectedEarthReorderView,
   ProjectedGameView,
   ProjectedOrderedZoneItem,
   ProjectedPlayerView,
@@ -42,11 +47,36 @@ export function getLegalActionsForState(state: GameState, viewer: Viewer): Comma
 
   const activePlayer = state.players[state.activePlayerIndex];
 
+  const appendAnytimeReaderBonus = (actions: Command['type'][]): Command['type'][] => {
+    if (
+      activePlayer &&
+      state.ruleset.features.elementalEffects &&
+      canSpendReaderBonusInPhase(state.phase, state.ruleset)
+    ) {
+      const availBonuses = getAvailableReaderBonusesForTurn(activePlayer, state.turn, state.ruleset);
+      const canUseBonus =
+        availBonuses.length > 0 &&
+        (!state.ruleset.readerBonusConsumesTurnAction || !activePlayer.effectUsedThisTurn);
+      if (canUseBonus && !actions.includes('UseReaderBonus')) {
+        actions.push('UseReaderBonus');
+      }
+      if (
+        canUseBonus &&
+        availBonuses.some((b) => b.sourceElement === 'earth') &&
+        state.days.length >= 2 &&
+        !actions.includes('StartEarthPeek')
+      ) {
+        actions.push('StartEarthPeek');
+      }
+    }
+    return actions;
+  };
+
   switch (state.phase) {
     case 'AWAITING_ABANDONED_CHOICE':
-      return ['ClaimAbandonedCard', 'DeclineAbandonedCard'];
+      return appendAnytimeReaderBonus(['ClaimAbandonedCard', 'DeclineAbandonedCard']);
     case 'AWAITING_READING_DECISION':
-      return ['PursueCenter', 'DiscardCenter'];
+      return appendAnytimeReaderBonus(['PursueCenter', 'DiscardCenter']);
     case 'AWAITING_EVENT_RESOLUTION': {
       const eventId = state.board.event[0];
       const eventCard = eventId ? state.cards[eventId] : undefined;
@@ -57,19 +87,21 @@ export function getLegalActionsForState(state: GameState, viewer: Viewer): Comma
       return state.board.center.length > 0 ? ['ClaimCenterCard', 'DiscardCenterCard'] : ['EndTurn'];
     case 'AWAITING_HAND_DISCARD':
       return ['DiscardHandCard'];
+    case 'AWAITING_EARTH_REORDER':
+      return ['CommitEarthReorder'];
     case 'AWAITING_ELEMENTAL_ACTION': {
       const actions: Command['type'][] = [];
       if (activePlayer && state.ruleset.features.elementalEffects) {
         if (!activePlayer.effectUsedThisTurn && activePlayer.hand.length > 0) {
           actions.push('UseElementalEffect');
+          if (
+            state.days.length >= 2 &&
+            activePlayer.hand.some((id) => state.cards[id]?.element === 'earth')
+          ) {
+            actions.push('StartEarthPeek');
+          }
         }
-        const availBonuses = getAvailableReaderBonusesForTurn(activePlayer, state.turn, state.ruleset);
-        const canUseBonus =
-          availBonuses.length > 0 &&
-          (!state.ruleset.readerBonusConsumesTurnAction || !activePlayer.effectUsedThisTurn);
-        if (canUseBonus) {
-          actions.push('UseReaderBonus');
-        }
+        appendAnytimeReaderBonus(actions);
       }
       if (state.ruleset.elementalTiming === 'before_reading') {
         actions.push('AdvanceToReading');
@@ -79,7 +111,7 @@ export function getLegalActionsForState(state: GameState, viewer: Viewer): Comma
       return actions;
     }
     case 'READY_TO_END_TURN':
-      return ['EndTurn'];
+      return appendAnytimeReaderBonus(['EndTurn']);
     case 'GAME_OVER':
       return [];
   }
@@ -128,7 +160,14 @@ function buildDeckComponents(
   const locationById = new Map<string, string>();
 
   state.veil.forEach((id) => locationById.set(id, 'Veil (Public Discard)'));
-  state.board.parallel.forEach((id) => locationById.set(id, 'Board · Parallel'));
+  state.board.parallel.forEach((id) => {
+    const card = state.cards[id];
+    if (isAdmin || isMajorCard(card)) {
+      locationById.set(id, 'Board · Parallel');
+    } else {
+      locationById.set(id, 'Deck / Hidden');
+    }
+  });
 
   state.board.event.forEach((id) => {
     if (state.eventRevealed) {
@@ -235,10 +274,21 @@ export function projectView(state: GameState, viewer: Viewer): ProjectedGameView
     };
   });
 
-  const parallelItems: ProjectedBoardSlotItem[] = state.board.parallel.map((id) => ({
-    hidden: false,
-    card: state.cards[id]!
-  }));
+  const parallelItems: ProjectedBoardSlotItem[] = state.board.parallel.map((id) => {
+    const card = state.cards[id]!;
+    if (isAdmin || isMajorCard(card)) {
+      return {
+        hidden: false,
+        card,
+        privateToReader: !isMajorCard(card)
+      };
+    }
+    return {
+      hidden: true,
+      backGroup: card.backGroup,
+      label: 'Incoming Timeline (Concealed)'
+    };
+  });
 
   let eventReality: EventReality | null = null;
   if (state.board.event.length > 0 && canInspectEvent) {
@@ -413,6 +463,19 @@ function buildOrderedZoneItems(params: {
     hiddenLabel: 'Concealed Veil history'
   });
 
+  const pendingEarthReorder: ProjectedEarthReorderView | null = state.pendingEarthReorder
+    ? {
+        playerId: state.pendingEarthReorder.playerId,
+        strength: state.pendingEarthReorder.strength,
+        count: state.pendingEarthReorder.peekedCardIds.length,
+        cards:
+          isAdmin ||
+          (viewer.role === 'player' && viewer.playerId === state.pendingEarthReorder.playerId)
+            ? mapCardIds(state.pendingEarthReorder.peekedCardIds, state.cards)
+            : null
+      }
+    : null;
+
   return {
     viewer,
     engineVersion: state.engineVersion,
@@ -442,6 +505,7 @@ function buildOrderedZoneItems(params: {
     abandonedByPlayerId: state.abandonedByPlayerId,
     currentReading: currentReadingView,
     readingHistory: [...state.readingHistory],
+    pendingEarthReorder,
     board: {
       event: eventItems,
       center: centerItems,

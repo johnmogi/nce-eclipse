@@ -1,4 +1,6 @@
+import { useEffect, useState } from 'react';
 import {
+  canSpendReaderBonusInPhase,
   ELEMENT_META,
   type BoardTargetSlot,
   type Command,
@@ -12,7 +14,6 @@ import {
 import type { PlayControlMode } from '../../sim/botController.js';
 import {
   buildElementalCommand,
-  moveEarthOrderSlot,
   type ElementalSelectionState,
   type ElementalTargetContext
 } from '../elementalTargeting.js';
@@ -22,10 +23,17 @@ import { DeckDaysBrowser } from './DeckDaysBrowser.js';
 import { VeilBrowser } from './VeilBrowser.js';
 
 const ELEMENT_VERB_HINT: Readonly<Record<Element, string>> = {
-  air: 'Shuffle — click Deck of Days or an occupied Board card to shuffle unpredictably.',
-  fire: 'Burn — click Deck of Days or an occupied Board card to burn directly to the Veil.',
-  water: 'Resurface — click the Veil to select face-up cards to return to Deck of Days.',
-  earth: 'Reorder — click Deck of Days or an occupied Board card to arrange card order.'
+  air: 'Shuffle — click Deck of Days (Immediate Future) or an occupied Board slot to shuffle unpredictably.',
+  fire: 'Burn — click Deck of Days (Immediate Future) or an occupied Board slot to burn straight to the Veil.',
+  water: 'Resurface — click The Veil below to select face-up cards to return to Deck of Days.',
+  earth: 'Reorder — click Deck of Days to privately peek & arrange the Immediate Future, or click an occupied Board slot.'
+};
+
+const READER_BONUS_ACTION_SPEC: Readonly<Record<Element, string>> = {
+  air: 'Shuffle 1 Board card or the Immediate Future (top 3 of Days)',
+  fire: 'Burn 1 Board card or Immediate Future card → Veil',
+  water: 'Resurface 1 card from The Veil → Deck of Days',
+  earth: 'Privately peek & reposition 1 Board or Immediate Future card'
 };
 
 const ELEMENT_SHORT_VERB: Readonly<Record<Element, string>> = {
@@ -39,6 +47,7 @@ function getTurnProgressIndex(phase: GamePhase, preReadingElemental: boolean): n
   if (preReadingElemental) {
     switch (phase) {
       case 'AWAITING_ELEMENTAL_ACTION':
+      case 'AWAITING_EARTH_REORDER':
         return 0; // Elemental Prep
       case 'AWAITING_ABANDONED_CHOICE':
       case 'AWAITING_READING':
@@ -63,6 +72,7 @@ function getTurnProgressIndex(phase: GamePhase, preReadingElemental: boolean): n
     case 'AWAITING_HAND_DISCARD':
       return 1; // Encounter
     case 'AWAITING_ELEMENTAL_ACTION':
+    case 'AWAITING_EARTH_REORDER':
       return 2; // Elemental Action
     case 'READY_TO_END_TURN':
     case 'GAME_OVER':
@@ -158,14 +168,35 @@ export function GameTable({
   const isHumanVsBot = controlMode === 'human-vs-bot';
   const isElementalWindow =
     view.phase === 'AWAITING_ELEMENTAL_ACTION' && canActAsActivePlayer && !isBotActing;
+  const isBonusWindow =
+    canSpendReaderBonusInPhase(view.phase, view.ruleset) && canActAsActivePlayer && !isBotActing;
+  const canTargetZones = isElementalWindow || (isBonusWindow && elementalSelection.sourceKind === 'bonus');
   const activeElement = elementalCtx.activeElement;
   const cmdBuild = buildElementalCommand(view, elementalSelection, elementalCtx);
 
-  const daysClickable = isElementalWindow && elementalCtx.eligibleZones.days;
-  const eventClickable = isElementalWindow && elementalCtx.eligibleZones.boardEvent;
-  const centerClickable = isElementalWindow && elementalCtx.eligibleZones.boardCenter;
-  const parallelClickable = isElementalWindow && elementalCtx.eligibleZones.boardParallel;
-  const veilHighlighted = isElementalWindow && elementalCtx.eligibleZones.veil;
+  const [earthPeekOrder, setEarthPeekOrder] = useState<string[]>([]);
+  const earthPeekKey = view.pendingEarthReorder?.cards?.map((c) => c.id).join(',') ?? '';
+  useEffect(() => {
+    setEarthPeekOrder(earthPeekKey ? earthPeekKey.split(',') : []);
+  }, [earthPeekKey]);
+
+  const movePeekCard = (fromIdx: number, dir: -1 | 1) => {
+    const toIdx = fromIdx + dir;
+    if (toIdx < 0 || toIdx >= earthPeekOrder.length) return;
+    setEarthPeekOrder((prev) => {
+      const next = [...prev];
+      const tmp = next[fromIdx]!;
+      next[fromIdx] = next[toIdx]!;
+      next[toIdx] = tmp;
+      return next;
+    });
+  };
+
+  const daysClickable = canTargetZones && elementalCtx.eligibleZones.days;
+  const eventClickable = canTargetZones && elementalCtx.eligibleZones.boardEvent;
+  const centerClickable = canTargetZones && elementalCtx.eligibleZones.boardCenter;
+  const parallelClickable = canTargetZones && elementalCtx.eligibleZones.boardParallel;
+  const veilHighlighted = canTargetZones && elementalCtx.eligibleZones.veil;
   const preReadingElemental = view.ruleset.elementalTiming === 'before_reading';
   const requiredEclipses =
     view.ruleset.eclipseVictoryCount === 'players-plus-one'
@@ -381,7 +412,7 @@ export function GameTable({
                     </span>
                   )}
                   {p.availableReaderBonusCount > 0 ? (
-                    isElementalWindow &&
+                    isBonusWindow &&
                     p.id === view.activePlayerId &&
                     availableBonuses.length > 0 ? (
                       <button
@@ -531,7 +562,7 @@ export function GameTable({
                       <div className="mini-face-glyph">{item.card.shortLabel}</div>
                       <div className="mini-face-tag">
                         {item.card.family === 'classic-court'
-                          ? `Major +${item.card.courtBonus ?? 1}`
+                          ? `Court +${item.card.courtBonus ?? 1}`
                           : view.eventReality === 'treasure'
                             ? 'Treasure'
                             : view.eventReality === 'barrier'
@@ -645,13 +676,20 @@ export function GameTable({
                       key={item.card.id}
                       className={`mini-face-card ${
                         item.card.color === 'red' ? 'color-red' : 'color-black'
-                      } slot-major-card`}
+                      } ${item.card.family === 'classic-court' ? 'slot-major-card' : ''}`}
+                      title={
+                        item.card.family === 'classic-court'
+                          ? `Classic Court (Major Proxy +${item.card.courtBonus ?? 1})`
+                          : 'Incoming timeline card (visible to Admin Inspector)'
+                      }
                     >
                       <div className="mini-face-glyph">{item.card.shortLabel}</div>
                       <div className="mini-face-tag">
                         {item.card.family === 'classic-court'
-                          ? `Major +${item.card.courtBonus ?? 1}`
-                          : 'Major'}
+                          ? `Court +${item.card.courtBonus ?? 1}`
+                          : item.privateToReader
+                            ? 'Next (Hidden)'
+                            : `${item.card.vp} VP`}
                       </div>
                     </div>
                   )
@@ -715,10 +753,10 @@ export function GameTable({
       )}
 
       {/* EXPANDABLE COMPLETE VEIL BROWSER (NEWEST FIRST · AUTO-OPENS FOR WATER) */}
-      {(veilTrayOpen || activeElement === 'water') && (
+      {(veilTrayOpen || (activeElement === 'water' && canTargetZones)) && (
         <VeilBrowser
           view={view}
-          isWaterMode={activeElement === 'water' && isElementalWindow}
+          isWaterMode={activeElement === 'water' && canTargetZones}
           elementalSelection={elementalSelection}
           elementalCtx={elementalCtx}
           onToggleVeilCard={onToggleVeilCard}
@@ -903,8 +941,9 @@ export function GameTable({
                 </span>
               </h2>
               <div className="brand-sub">
-                The Center card remains concealed. You decide whether to pursue it (revealing Center
-                &amp; Left Event) or discard it straight to the Veil.
+                {view.ruleset.replaceCenterOnDiscard
+                  ? 'The Center card remains concealed. Accept to flip it & Left Event — or Reject it face-up to the Veil to draw & flip a fresh replacement card + Left Event.'
+                  : 'The Center card remains concealed. You decide whether to pursue it (revealing Center & Left Event) or discard it straight to the Veil.'}
               </div>
             </div>
             <div className="toolbar-group">
@@ -916,7 +955,9 @@ export function GameTable({
                       onSendCommand({ type: 'PursueCenter', playerId: view.activePlayerId })
                     }
                   >
-                    Pursue Center Card
+                    {view.ruleset.replaceCenterOnDiscard
+                      ? 'Accept & Flip Center'
+                      : 'Pursue Center Card'}
                   </button>
                   <button
                     className="btn"
@@ -924,7 +965,9 @@ export function GameTable({
                       onSendCommand({ type: 'DiscardCenter', playerId: view.activePlayerId })
                     }
                   >
-                    Discard to Veil
+                    {view.ruleset.replaceCenterOnDiscard
+                      ? 'Reject to Veil & Draw New Card'
+                      : 'Discard to Veil'}
                   </button>
                 </>
               ) : controlMode === 'hotseat' ? (
@@ -1019,6 +1062,99 @@ export function GameTable({
               </div>
             )}
           </div>
+        ) : view.phase === 'AWAITING_EARTH_REORDER' && view.pendingEarthReorder ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div className="action-row">
+              <div>
+                <h2 className="decision-title">
+                  ♦ Earth Private Peek — Arrange The Immediate Future (Top{' '}
+                  {view.pendingEarthReorder.count} Card
+                  {view.pendingEarthReorder.count === 1 ? '' : 's'})
+                </h2>
+                <div className="brand-sub">
+                  Only you can see these cards. Arrange left → right (#1 = Next Upcoming drawn
+                  first), or send Next Upcoming to the bottom of Deck of Days.
+                </div>
+              </div>
+              <div className="toolbar-group">
+                {canActAsActivePlayer && (
+                  <>
+                    <button
+                      className="btn btn-primary"
+                      onClick={() =>
+                        onSendCommand({
+                          type: 'CommitEarthReorder',
+                          playerId: view.activePlayerId,
+                          newOrder: earthPeekOrder
+                        })
+                      }
+                    >
+                      Confirm Immediate Future Order
+                    </button>
+                    <button
+                      className="btn"
+                      onClick={() =>
+                        onSendCommand({
+                          type: 'CommitEarthReorder',
+                          playerId: view.activePlayerId,
+                          moveTopToBottom: true
+                        })
+                      }
+                    >
+                      Send Next Upcoming → Bottom of Deck
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+
+            {view.pendingEarthReorder.cards ? (
+              <div className="earth-slots-row" data-testid="earth-peek-cards">
+                {earthPeekOrder.map((cardId, posIdx) => {
+                  const card = view.pendingEarthReorder!.cards!.find((c) => c.id === cardId);
+                  if (!card) return null;
+                  return (
+                    <div
+                      key={card.id}
+                      className={`earth-order-card ${
+                        card.color === 'red' ? 'color-red' : 'color-black'
+                      }`}
+                    >
+                      <div className="earth-pos-label">
+                        {posIdx === 0 ? 'Next Upcoming (#1)' : `#${posIdx + 1} Upcoming`}
+                      </div>
+                      <div className="earth-card-face">{card.shortLabel}</div>
+                      <div className="card-meta">
+                        {card.label} ({card.vp} VP)
+                      </div>
+                      {earthPeekOrder.length > 1 && canActAsActivePlayer && (
+                        <div className="toolbar-group">
+                          <button
+                            className="btn btn-sm"
+                            disabled={posIdx === 0}
+                            onClick={() => movePeekCard(posIdx, -1)}
+                          >
+                            ← Earlier
+                          </button>
+                          <button
+                            className="btn btn-sm"
+                            disabled={posIdx === earthPeekOrder.length - 1}
+                            onClick={() => movePeekCard(posIdx, 1)}
+                          >
+                            Later →
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="brand-sub">
+                {activePlayer.name} is privately inspecting the Immediate Future…
+              </div>
+            )}
+          </div>
         ) : view.phase === 'AWAITING_ELEMENTAL_ACTION' ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             <div className="action-row">
@@ -1042,7 +1178,7 @@ export function GameTable({
               </div>
 
               <div className="toolbar-group">
-                {activeElement && (
+                {activeElement && !(activeElement === 'earth' && elementalSelection.daysSelected) && (
                   <>
                     <button
                       className="btn btn-primary"
@@ -1052,6 +1188,38 @@ export function GameTable({
                       }}
                     >
                       {cmdBuild.ok ? `Confirm: ${cmdBuild.actionLabel}` : 'Select Target on Table'}
+                    </button>
+                    <button className="btn btn-sm" onClick={onCancelElemental}>
+                      Cancel
+                    </button>
+                  </>
+                )}
+                {activeElement === 'earth' && elementalSelection.daysSelected && (
+                  <>
+                    <button
+                      className="btn btn-primary"
+                      disabled={!canActAsActivePlayer || view.daysCount < 2}
+                      onClick={() =>
+                        onSendCommand(
+                          elementalSelection.sourceKind === 'bonus' && elementalCtx.bonus
+                            ? {
+                                type: 'StartEarthPeek',
+                                playerId: view.activePlayerId,
+                                bonusId: elementalCtx.bonus.id
+                              }
+                            : {
+                                type: 'StartEarthPeek',
+                                playerId: view.activePlayerId,
+                                sourceCardId: elementalCtx.sourceCard!.id
+                              }
+                        )
+                      }
+                    >
+                      👁 Privately Peek &amp; Arrange Top{' '}
+                      {Math.min(elementalCtx.strength, view.daysCount)} of Immediate Future
+                      {elementalCtx.sourceCard
+                        ? ` (Consumes ${elementalCtx.sourceCard.shortLabel} → Veil)`
+                        : ' (Free Reader Bonus)'}
                     </button>
                     <button className="btn btn-sm" onClick={onCancelElemental}>
                       Cancel
@@ -1085,9 +1253,12 @@ export function GameTable({
             </div>
 
             {availableBonuses.length > 0 && canActAsActivePlayer && (
-              <div className="bonus-cta-strip">
+              <div className="bonus-cta-strip" data-testid="reader-bonus-strip">
                 <div className="bonus-cta-meta">
-                  <span className="badge badge-warn">Free Reader Bonus (0 hand cost)</span>
+                  <span className="badge badge-warn">
+                    Free Reader Bonus (0 hand cost ·{' '}
+                    {view.ruleset.readerBonusAnytimeOnTurn ? 'Usable anytime this turn' : 'Elemental window'})
+                  </span>
                   <span className="brand-sub">
                     Click to activate, pick a target on the highlighted zone, then click Confirm.
                   </span>
@@ -1106,9 +1277,8 @@ export function GameTable({
                         onClick={() => onSelectBonusForElemental(b.id)}
                       >
                         {isSelected ? '✓ Active: ' : '★ Activate '}
-                        {ELEMENT_META[el].suitSymbol} {ELEMENT_META[el].label} (
-                        {ELEMENT_SHORT_VERB[el].split(' ')[1]}) · Tier 1 Free · Expires after T
-                        {view.turn}
+                        {ELEMENT_META[el].suitSymbol} {ELEMENT_META[el].label} Tier 1 —{' '}
+                        {READER_BONUS_ACTION_SPEC[el]} (Expires after T{view.turn})
                       </button>
                     );
                   })}
@@ -1141,100 +1311,14 @@ export function GameTable({
               (elementalSelection.daysSelected || elementalSelection.boardSlots.length > 0) && (
                 <div className="earth-reorder-box">
                   {elementalSelection.daysSelected ? (
-                    <>
-                      <div className="toolbar-group" style={{ justifyContent: 'space-between' }}>
-                        <strong>Earth Reorder · Deck of Days</strong>
-                        <div className="toolbar-group">
-                          {elementalCtx.strength >= 2 && view.daysCount >= 2 && (
-                            <button
-                              className={`btn btn-sm ${
-                                elementalSelection.earthMode === 'days_reorder' ? 'btn-active' : ''
-                              }`}
-                              onClick={() => {
-                                const len = Math.min(elementalCtx.strength, view.daysCount);
-                                onUpdateElementalSelection({
-                                  earthMode: 'days_reorder',
-                                  earthIndexOrder: len === 3 ? [1, 2, 0] : [1, 0]
-                                });
-                              }}
-                            >
-                              Arrange Top {Math.min(elementalCtx.strength, view.daysCount)}
-                            </button>
-                          )}
-                          <button
-                            className={`btn btn-sm ${
-                              elementalSelection.earthMode === 'days_to_bottom' ? 'btn-active' : ''
-                            }`}
-                            onClick={() =>
-                              onUpdateElementalSelection({ earthMode: 'days_to_bottom', daysCount: 1 })
-                            }
-                          >
-                            Move Top Card → Bottom
-                          </button>
-                        </div>
-                      </div>
-
-                      {elementalSelection.earthMode === 'days_reorder' &&
-                      elementalCtx.strength >= 2 ? (
-                        <div className="earth-slots-row">
-                          {elementalSelection.earthIndexOrder.map((origIdx, posIdx) => {
-                            const adminCard = view.daysCards?.[origIdx];
-                            return (
-                              <div key={`earth-pos-${origIdx}`} className="earth-order-card">
-                                <div className="earth-pos-label">New #{posIdx + 1}</div>
-                                {adminCard ? (
-                                  <div className="earth-card-face">{adminCard.shortLabel}</div>
-                                ) : (
-                                  <CardBack
-                                    backGroup={view.daysTopBackGroup ?? 'minor'}
-                                    size="sm"
-                                    label={`Orig #${origIdx + 1}`}
-                                  />
-                                )}
-                                <div className="toolbar-group">
-                                  <button
-                                    className="btn btn-sm"
-                                    disabled={posIdx === 0}
-                                    onClick={() =>
-                                      onUpdateElementalSelection({
-                                        earthIndexOrder: moveEarthOrderSlot(
-                                          elementalSelection.earthIndexOrder,
-                                          posIdx,
-                                          -1
-                                        )
-                                      })
-                                    }
-                                  >
-                                    ←
-                                  </button>
-                                  <button
-                                    className="btn btn-sm"
-                                    disabled={
-                                      posIdx === elementalSelection.earthIndexOrder.length - 1
-                                    }
-                                    onClick={() =>
-                                      onUpdateElementalSelection({
-                                        earthIndexOrder: moveEarthOrderSlot(
-                                          elementalSelection.earthIndexOrder,
-                                          posIdx,
-                                          1
-                                        )
-                                      })
-                                    }
-                                  >
-                                    →
-                                  </button>
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      ) : (
-                        <div className="brand-sub">
-                          Deliberately moves the top card of Deck of Days to the bottom of the deck.
-                        </div>
-                      )}
-                    </>
+                    <div className="brand-sub">
+                      <strong>Earth · Immediate Future Peek (Private):</strong> Click{' '}
+                      <strong>Privately Peek &amp; Arrange</strong> above to consume{' '}
+                      {elementalCtx.sourceCard ? elementalCtx.sourceCard.shortLabel : 'your Reader Bonus'}{' '}
+                      and privately inspect the top {Math.min(elementalCtx.strength, view.daysCount)}{' '}
+                      card{Math.min(elementalCtx.strength, view.daysCount) === 1 ? '' : 's'} of Deck
+                      of Days before setting their exact order.
+                    </div>
                   ) : (
                     <div className="toolbar-group" style={{ justifyContent: 'space-between' }}>
                       <strong>
@@ -1332,6 +1416,77 @@ export function GameTable({
             </button>
           </div>
         )}
+
+        {/* Anytime Free Reader Bonus Bar when outside AWAITING_ELEMENTAL_ACTION */}
+        {view.phase !== 'AWAITING_ELEMENTAL_ACTION' &&
+          view.phase !== 'AWAITING_EARTH_REORDER' &&
+          isBonusWindow &&
+          availableBonuses.length > 0 && (
+            <div className="bonus-cta-strip" style={{ marginTop: 10 }} data-testid="reader-bonus-anytime-strip">
+              <div className="bonus-cta-meta">
+                <span className="badge badge-warn">
+                  Free Reader Bonus Available Anytime This Turn (0 hand cost)
+                </span>
+                <span className="brand-sub">
+                  {activeElement
+                    ? ELEMENT_VERB_HINT[activeElement]
+                    : 'Activate now without losing your current turn step.'}
+                </span>
+              </div>
+              <div className="toolbar-group">
+                {availableBonuses.map((b) => {
+                  const el = b.sourceElement!;
+                  const isSelected =
+                    elementalSelection.sourceKind === 'bonus' &&
+                    elementalSelection.bonusId === b.id;
+                  return (
+                    <button
+                      key={b.id}
+                      type="button"
+                      className={`btn ${isSelected ? 'btn-warn-active' : 'btn-warn'}`}
+                      onClick={() => onSelectBonusForElemental(b.id)}
+                    >
+                      {isSelected ? '✓ Active: ' : '★ Activate '}
+                      {ELEMENT_META[el].suitSymbol} {ELEMENT_META[el].label} Tier 1 —{' '}
+                      {READER_BONUS_ACTION_SPEC[el]}
+                    </button>
+                  );
+                })}
+                {elementalSelection.sourceKind === 'bonus' && activeElement && (
+                  <>
+                    {activeElement === 'earth' && elementalSelection.daysSelected && elementalCtx.bonus ? (
+                      <button
+                        className="btn btn-primary"
+                        disabled={view.daysCount < 2}
+                        onClick={() =>
+                          onSendCommand({
+                            type: 'StartEarthPeek',
+                            playerId: view.activePlayerId,
+                            bonusId: elementalCtx.bonus!.id
+                          })
+                        }
+                      >
+                        👁 Privately Peek Top 1 of Immediate Future (Free Bonus)
+                      </button>
+                    ) : (
+                      <button
+                        className="btn btn-primary"
+                        disabled={!cmdBuild.ok}
+                        onClick={() => {
+                          if (cmdBuild.ok) onSendCommand(cmdBuild.command);
+                        }}
+                      >
+                        {cmdBuild.ok ? `Confirm: ${cmdBuild.actionLabel}` : 'Select Target on Table'}
+                      </button>
+                    )}
+                    <button className="btn btn-sm" onClick={onCancelElemental}>
+                      Cancel
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
       </div>
 
       {/* ===================================================================== */}

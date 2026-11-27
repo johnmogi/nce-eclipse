@@ -238,7 +238,23 @@ export function placeDrawnMajorOnBoard(
   const card = ctx.cards[majorCardId]!;
   let destination: 'parallel' | 'event' | 'center' = 'parallel';
 
-  if (ctx.boardParallel.length === 0) {
+  if (ctx.boardParallel.length === 0 || !isMajorCard(ctx.cards[ctx.boardParallel[0]!])) {
+    if (ctx.boardParallel.length > 0) {
+      const displacedId = ctx.boardParallel.shift()!;
+      ctx.veil.push(displacedId);
+      ctx.newEvents.push(
+        makeEvent(ctx.nextSeq(), ctx.turn, ctx.round, ctx.phase, ctx.ruleset.version, {
+          actor: 'system',
+          type: 'CardMoved',
+          affectedCardIds: [displacedId],
+          source,
+          reason: 'displaced-by-major-arrival',
+          visibility: 'public',
+          summary: `${ctx.cards[displacedId]!.label} displaced from Right chamber to the Veil by arriving Classic Court ${card.label}.`,
+          payload: { from: 'parallel', to: 'veil' }
+        })
+      );
+    }
     ctx.boardParallel.push(majorCardId);
     destination = 'parallel';
   } else if (ctx.boardEvent.length === 0 || !isMajorCard(ctx.cards[ctx.boardEvent[0]!])) {

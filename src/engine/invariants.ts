@@ -150,6 +150,25 @@ export function checkInvariants(state: GameState): InvariantReport {
     }
   }
 
+  if (state.phase === 'AWAITING_EARTH_REORDER') {
+    const pending = state.pendingEarthReorder;
+    if (!pending || pending.peekedCardIds.length === 0) {
+      violations.push('AWAITING_EARTH_REORDER requires active pendingEarthReorder with peekedCardIds');
+    } else {
+      const topSlice = state.days.slice(0, pending.peekedCardIds.length);
+      if (topSlice.length !== pending.peekedCardIds.length) {
+        violations.push('pendingEarthReorder exceeds remaining Deck of Days cards');
+      } else {
+        for (let i = 0; i < pending.peekedCardIds.length; i++) {
+          if (topSlice[i] !== pending.peekedCardIds[i]) {
+            violations.push('pendingEarthReorder cards do not match current top of Deck of Days');
+            break;
+          }
+        }
+      }
+    }
+  }
+
   const expectedHash = computeStateHash(state);
   if (state.stateHash !== expectedHash) {
     violations.push(`State hash mismatch: stored "${state.stateHash}" vs computed "${expectedHash}"`);

@@ -444,6 +444,18 @@ export function chooseFairBotCommand(
     return { type: 'DiscardCenterCard', playerId: botPlayerId };
   }
 
+  if (view.phase === 'AWAITING_EARTH_REORDER' && view.pendingEarthReorder) {
+    const cards = view.pendingEarthReorder.cards;
+    if (cards && cards.length >= 2) {
+      return {
+        type: 'CommitEarthReorder',
+        playerId: botPlayerId,
+        newOrder: [...cards.slice(1), cards[0]!].map((c) => c.id)
+      };
+    }
+    return { type: 'CommitEarthReorder', playerId: botPlayerId, moveTopToBottom: true };
+  }
+
   if (view.phase === 'READY_TO_END_TURN') {
     return { type: 'EndTurn', playerId: botPlayerId };
   }

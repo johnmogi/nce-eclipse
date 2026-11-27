@@ -1,5 +1,6 @@
 import { ELEMENT_META } from './cards.js';
 import { makeEvent } from './event-helpers.js';
+import { isMajorCard } from './majors.js';
 import { deterministicShuffle } from './rng.js';
 import type {
   BoardTargetSlot,
@@ -55,6 +56,16 @@ export function computeElementalStrength(
       : 0;
   const strength = Math.max(1, Math.min(ruleset.maxEffectiveVP, baseVP + nativeBonusVP));
   return { baseVP, nativeBonusVP, strength };
+}
+
+export function canSpendReaderBonusInPhase(phase: GamePhase, ruleset: Ruleset): boolean {
+  if (phase === 'AWAITING_ELEMENTAL_ACTION') return true;
+  if (!ruleset.readerBonusAnytimeOnTurn) return false;
+  return (
+    phase === 'AWAITING_ABANDONED_CHOICE' ||
+    phase === 'AWAITING_READING_DECISION' ||
+    phase === 'READY_TO_END_TURN'
+  );
 }
 
 export function getAvailableReaderBonusesForTurn(
@@ -719,7 +730,7 @@ function executeValidatedPlan(
     if (slot === 'parallel') {
       const cardId = ctx.boardParallel.shift()!;
       ctx.majorPending = ctx.majorPending.filter((p) => p.cardId !== cardId);
-      return { cardId, wasPublic: true };
+      return { cardId, wasPublic: isMajorCard(cards[cardId]) };
     }
     const cardId = ctx.boardCenter.shift()!;
     const wasPublic = ctx.centerRevealed;
@@ -1279,12 +1290,12 @@ export function validateAndExecuteReaderBonus(
     };
   }
 
-  if (ctx.phase !== 'AWAITING_ELEMENTAL_ACTION') {
+  if (!canSpendReaderBonusInPhase(ctx.phase, ctx.ruleset)) {
     return {
       ok: false,
       error: {
         code: 'INVALID_PHASE',
-        message: `Reader bonuses can only be spent during AWAITING_ELEMENTAL_ACTION (current: ${ctx.phase}).`
+        message: `Reader bonuses cannot be spent during phase ${ctx.phase}.`
       }
     };
   }

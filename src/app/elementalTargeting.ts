@@ -1,12 +1,13 @@
-import type {
-  BoardTargetSlot,
-  Card,
-  Command,
-  Element,
-  ElementalTargetZone,
-  PendingReaderBonus,
-  ProjectedGameView,
-  ProjectedPlayerView
+import {
+  canSpendReaderBonusInPhase,
+  type BoardTargetSlot,
+  type Card,
+  type Command,
+  type Element,
+  type ElementalTargetZone,
+  type PendingReaderBonus,
+  type ProjectedGameView,
+  type ProjectedPlayerView
 } from '../engine/index.js';
 
 export type EarthActionMode =
@@ -68,7 +69,9 @@ export function getElementalTargetContext(
     boardParallel: false,
     veil: false
   };
-  if (view.phase !== 'AWAITING_ELEMENTAL_ACTION' || !view.ruleset.features.elementalEffects) {
+  const canUseHandNow = view.phase === 'AWAITING_ELEMENTAL_ACTION';
+  const canUseBonusNow = canSpendReaderBonusInPhase(view.phase, view.ruleset);
+  if ((!canUseHandNow && !canUseBonusNow) || !view.ruleset.features.elementalEffects) {
     return {
       activeElement: null,
       sourceCard: null,
@@ -85,7 +88,7 @@ export function getElementalTargetContext(
   let activeElement: Element | null = null;
   let strength = 0;
 
-  if (selection.sourceKind === 'bonus' && selection.bonusId) {
+  if (selection.sourceKind === 'bonus' && selection.bonusId && canUseBonusNow) {
     bonus =
       activePlayer.pendingReaderBonuses.find(
         (b) =>
@@ -98,7 +101,12 @@ export function getElementalTargetContext(
       activeElement = bonus.sourceElement;
       strength = 1;
     }
-  } else if (selection.sourceKind === 'hand' && selection.sourceCardId && activePlayer.hand) {
+  } else if (
+    canUseHandNow &&
+    selection.sourceKind === 'hand' &&
+    selection.sourceCardId &&
+    activePlayer.hand
+  ) {
     sourceCard = activePlayer.hand.find((c) => c.id === selection.sourceCardId) ?? null;
     if (sourceCard && sourceCard.element && !activePlayer.effectUsedThisTurn) {
       activeElement = sourceCard.element;

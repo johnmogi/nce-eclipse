@@ -349,6 +349,18 @@ export function chooseNextCommand(state: GameState, policy: AgentPolicyId): Comm
     return chooseElementalAction(state, player);
   }
 
+  if (state.phase === 'AWAITING_EARTH_REORDER' && state.pendingEarthReorder) {
+    const ids = state.pendingEarthReorder.peekedCardIds;
+    if (ids.length >= 2) {
+      return {
+        type: 'CommitEarthReorder',
+        playerId,
+        newOrder: [...ids.slice(1), ids[0]!]
+      };
+    }
+    return { type: 'CommitEarthReorder', playerId, moveTopToBottom: true };
+  }
+
   if (state.phase === 'READY_TO_END_TURN') {
     return { type: 'EndTurn', playerId };
   }

@@ -16,6 +16,10 @@ export interface RulesDraftState {
   tieBreak: EvolutionTieBreakPolicy;
   startHand: number;
   maxHand: number;
+  preventSetupEvolution: boolean;
+  replaceCenterOnDiscard: boolean;
+  emptyChamberMode: boolean;
+  readerBonusAnytimeOnTurn: boolean;
   readerBonusOnAbandon: boolean;
   readerBonusPolicy: ReaderBonusPolicy;
   readerBonusConsumesTurnAction: boolean;
@@ -87,6 +91,58 @@ export function RulesView({
               <option value="lowest-rank-same-element">Lowest Rank → Same Element</option>
               <option value="lowest-rank-first">Lowest Rank → Card ID</option>
               <option value="highest-jump-first">Highest Jump First</option>
+            </select>
+          </div>
+
+          <div className="field">
+            <label>Turn-1 3-Card Opening Hand (RD-01)</label>
+            <select
+              className="select"
+              value={draft.preventSetupEvolution ? 'yes' : 'no'}
+              onChange={(e) => onChangeDraft({ preventSetupEvolution: e.target.value === 'yes' })}
+            >
+              <option value="yes">Guaranteed 3 Playable Cards (R1 Default)</option>
+              <option value="no">Allow Setup Auto-Evolution (Legacy)</option>
+            </select>
+          </div>
+
+          <div className="field">
+            <label>Reject Reading Card Behavior (RD-04 AGREED)</label>
+            <select
+              className="select"
+              value={draft.replaceCenterOnDiscard ? 'replace' : 'end'}
+              onChange={(e) =>
+                onChangeDraft({ replaceCenterOnDiscard: e.target.value === 'replace' })
+              }
+            >
+              <option value="replace">Send to Veil + Draw &amp; Flip New Card + Event (R1 Default)</option>
+              <option value="end">Send to Veil &amp; End Encounter (Legacy MC/D1)</option>
+            </select>
+          </div>
+
+          <div className="field">
+            <label>Right Chamber Setup (RD-15)</label>
+            <select
+              className="select"
+              value={draft.emptyChamberMode ? 'empty' : 'filled'}
+              onChange={(e) => onChangeDraft({ emptyChamberMode: e.target.value === 'empty' })}
+            >
+              <option value="filled">Populate All 3 Board Slots on Turn 1 (Default)</option>
+              <option value="empty">Empty Chamber Mode (Vacant Until Major)</option>
+            </select>
+          </div>
+
+          <div className="field">
+            <label>Reader Bonus Activation Window (RD-05)</label>
+            <select
+              className="select"
+              value={draft.readerBonusAnytimeOnTurn ? 'anytime' : 'window'}
+              onChange={(e) =>
+                onChangeDraft({ readerBonusAnytimeOnTurn: e.target.value === 'anytime' })
+              }
+            >
+              <option value="anytime">Anytime During Your Turn (R1 Default)</option>
+              <option value="window">Elemental Window Only (Legacy D1)</option>
             </select>
           </div>
 

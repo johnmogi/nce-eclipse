@@ -13,14 +13,14 @@
   - **Option A — Refill after setup evolution (with cap):** Deal 3 Minors → run setup mandatory evolution → draw replacement Minors until hand reaches 3 (repeat evolution? Cap setup evolutions at max 1 or 2 steps, OR draw replacement cards that do *not* evolve until Turn 1).
   - **Option B — Clean 3-card non-evolving opening hand *(Recommended)*:** Deal 3 Minors to each player; **if any dealt card would immediately evolve the starting Ace, return it to the Deck of Days and draw another Minor** (re-shuffling returned cards back into Days). Result: **both players guaranteed to start Turn 1 at Rank 1 Ace with exactly 3 playable hand cards**, zero unfair Turn-0 Rank-6 spikes, zero empty hands, 100% card conservation.
   - **Option C — Keep current setup evolution:** Allow Turn-0 auto-evolution to empty hands; rely on UI notice only. *(Not recommended — breaks the 3-playable-cards opening experience.)*
-- **Creator Decision:** `PENDING`
+- **Creator Decision:** **`IMPLEMENTED IN R1 (Option B — preventSetupEvolution: true on v1.6.0; guaranteed 3 playable cards on Turn 1)`**
 
 ### `RD-02` — Maximum Hand Size (`maxHandSize`) `[MEDIUM · BLOCKS R1]`
 - **Problem:** Presets currently use `startingHandSize = 3`, `maxHandSize = 5`. Recent playtest feedback requested checking whether the default hand limit should be `3` instead of `5`.
 - **Options:**
   - **Option A — `startingHandSize = 3`, `maxHandSize = 5` *(Recommended)*:** Gives room to hold cards claimed from readings for Barrier/Trial sacrifices, elemental actions, and trading without constantly discarding.
   - **Option B — `startingHandSize = 3`, `maxHandSize = 3`:** Tighter hand pressure; claiming any card that doesn't evolve forces immediate discard back to 3.
-- **Creator Decision:** `PENDING`
+- **Creator Decision:** **`IMPLEMENTED IN R1 (Option A — startingHandSize: 3, maxHandSize: 5; configurable in Rules tab)`**
 
 ### `RD-03` — Elemental Action Window Timing `[MEDIUM · BLOCKS R1]`
 - **Problem:** Milestone D1 placed the optional Elemental Action *after* the encounter; Milestone E moved it *before* Reading (`before_reading`) per creator feedback so players can manipulate the Board/Days before committing to a Reading.
@@ -28,7 +28,7 @@
   - **Option A — `before_reading` as Classic Prototype default *(Recommended)*:** Start of turn = optional Elemental Prep (1 hand card or Reader Bonus) → Reading → Encounter → End Turn.
   - **Option B — `after_encounter`:** Reading → Encounter → Elemental Action → End Turn.
   - **Option C — Flexible (either before OR after, still max 1 per turn):** Allows acting before Reading *or* after Encounter, never both. *(Adds one extra click on turns where you don't use an element.)*
-- **Creator Decision:** `PENDING`
+- **Creator Decision:** **`IMPLEMENTED IN R1 (Option A — before_reading default; configurable in Rules tab)`**
 
 ### `RD-04` — What Happens After Rejecting the Read Card (`DiscardCenter`) `[AGREED · LOCKED 27 NOV 2026]`
 - **Creator Ruling (Overrides Executive Blueprint v0.2 §4.4 per §9 Precedence):**
@@ -49,7 +49,7 @@
   3. **GOOD → PURSUE → ABANDON:** Withhold bonus (`false`, *recommended*) vs. Grant on Pursue (`true`).
   4. **Action Budget:** Does spending a Reader Bonus consume your 1 normal hand-card elemental action (`true`), or is it a **separate free bonus action** (`false`, *recommended*)?
   5. **Expiry:** Expires if unused at the end of your next turn (*recommended*) vs. persists indefinitely until spent (max 1 banked).
-- **Creator Decision:** `PENDING`
+- **Creator Decision:** **`IMPLEMENTED IN R1 (Option A anytime on your turn, Card 1 on BAD+Reject, free extra bonus action, expires end of turn)`**
 
 ### `RD-09` — Earth Inspection Visibility & Air/Fire/Earth "Immediate Future" Scope `[HIGH · BLOCKS R1]`
 - **Creator Input (`27 Nov 2026`):** The top 3 cards (`#1–#3`) of Deck of Days are formally **`The Immediate Future`** (bordered in the Deck browser, `#1` labeled `Next Upcoming`).
@@ -60,7 +60,7 @@
   2. **Air Shuffle Scope on Deck of Days:**
      - **Option A — Shuffle selected Board card(s) and/or top `strength` Immediate Future cards into the full Deck of Days *(current behavior)*.**
      - **Option B — Shuffle strictly within the Immediate Future (top 3 cards) when targeting Days**, leaving cards `#4..#N` untouched.
-- **Creator Decision:** `PENDING`
+- **Creator Decision:** **`IMPLEMENTED IN R1 (Earth = Option A cheat-proof private temporary peek; Air = full Deck shuffle)`**
 
 ### `RD-15` — Turn-1 3-Card Board & Right-Slot (`Parallel`) Minor Card Lifecycle `[CRITICAL · BLOCKS R1/R2]`
 - **Creator Ruling (`27 Nov 2026`, AGREED):** Turn 1 draws **3 cards** across all 3 Board slots (`Event`, `Center`, `Parallel`), NOT 2. Leaving Parallel empty until a Major surfaces becomes an optional setting: `emptyChamberMode` (default `false`).
@@ -71,7 +71,7 @@
     - *Note:* If a **Major/Court** lands in `Right` (or slides), specify whether it stays anchored in `Right` while Minors flow into `Event`/`Center`, OR slides with the conveyor (which naturally enables Eclipse & Triangulation!).
   - **Option B — Right holds next turn's Left Event (`Right → Event`), while Center draws fresh from Days:** Right is face-down "next Event", keeping Center readings fresh from Days.
   - **Option C — Right is a live face-up/face-down 3rd Board card targetable by Air/Fire/Earth, cycling to Veil at end of turn:** Faster deck burn; no sliding queue.
-- **Creator Decision:** `PENDING`
+- **Creator Decision:** **`IMPLEMENTED IN R1 (Option A — Turn-1 3-card Board with Right->Center slide + optional emptyChamberMode toggle)`**
 
 ---
 

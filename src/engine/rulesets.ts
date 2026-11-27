@@ -1,6 +1,6 @@
 import type { Ruleset, RuleStatus } from './types.js';
 
-export const ENGINE_VERSION = '0.5.0-me';
+export const ENGINE_VERSION = '0.6.0-r1';
 
 const INACTIVE_FUTURE_FEATURES = {
   readings: false,
@@ -41,6 +41,10 @@ const MILESTONE_E_FEATURES = {
 const BASE_MC_DEFAULTS = {
   readerBonusPolicy: 'record_only' as const,
   readerBonusConsumesTurnAction: true,
+  readerBonusAnytimeOnTurn: false,
+  preventSetupEvolution: false,
+  replaceCenterOnDiscard: false,
+  emptyChamberMode: true,
   rotateEventOnCenterDiscard: false,
   elementalTiming: 'after_encounter' as const,
   elementalNativePrimaryBonusVP: 0,
@@ -50,6 +54,10 @@ const BASE_MC_DEFAULTS = {
 const BASE_D1_DEFAULTS = {
   readerBonusPolicy: 'free_tier1_elemental_next_turn' as const,
   readerBonusConsumesTurnAction: true,
+  readerBonusAnytimeOnTurn: false,
+  preventSetupEvolution: false,
+  replaceCenterOnDiscard: false,
+  emptyChamberMode: true,
   rotateEventOnCenterDiscard: true,
   elementalTiming: 'after_encounter' as const,
   elementalNativePrimaryBonusVP: 0,
@@ -58,7 +66,11 @@ const BASE_D1_DEFAULTS = {
 
 const BASE_E_DEFAULTS = {
   readerBonusPolicy: 'free_tier1_elemental_next_turn' as const,
-  readerBonusConsumesTurnAction: true,
+  readerBonusConsumesTurnAction: false,
+  readerBonusAnytimeOnTurn: true,
+  preventSetupEvolution: true,
+  replaceCenterOnDiscard: true,
+  emptyChamberMode: false,
   rotateEventOnCenterDiscard: true,
   elementalTiming: 'before_reading' as const,
   elementalNativePrimaryBonusVP: 0,
@@ -68,11 +80,11 @@ const BASE_E_DEFAULTS = {
 export const RULESET_PRESETS: Readonly<Record<string, Ruleset>> = {
   'poker-proto-e': {
     id: 'poker-proto-e',
-    version: '1.5.0',
-    name: 'Poker Prototype — Milestone E (48 Cards · Courts, Eclipse, Triangulation & Pre-Reading Prep)',
+    version: '1.6.0',
+    name: 'Classic Prototype — R1 (48 Cards · 3-Card Hand, Reject-Replace, 3-Slot Board & Courts)',
     category: 'prototype',
     description:
-      'Complete 48-card Bicycle/Poker Prototype: 36 Minors (Ace–9) + 12 Classic Court Major Arcana (Prince/Queen/King). Start-of-turn Elemental Prep BEFORE Reading, Parallel Dimension arrivals, Black+Red same-rank Eclipse (3 to win, +1/+2/+3 persistent VP), and 3-slot Triangulation victory.',
+      '48-card Bicycle/Poker Classic Prototype (36 Minors + 12 Classic Court Major Proxies): guaranteed 3 playable starting hand cards, Turn-1 3-slot Board, Reject-and-Replace readings, flexible anytime Reader Bonus, private Earth Immediate Future peek, and Classic Eclipse/Triangulation.',
     deckProfile: 'classic-48',
     maxMinorRank: 9,
     includeCourts: true,
@@ -101,8 +113,8 @@ export const RULESET_PRESETS: Readonly<Record<string, Ruleset>> = {
   },
   'poker-proto-e-quick': {
     id: 'poker-proto-e-quick',
-    version: '1.5.0',
-    name: 'Poker Prototype — Milestone E Quick Eclipse (1 Eclipse or Triangulation Wins)',
+    version: '1.6.0',
+    name: 'Classic Prototype — R1 Quick Eclipse (1 Eclipse Wins)',
     category: 'prototype',
     description:
       '48-card Classic Courts prototype tuned for fast playtesting: first Eclipse or Triangulation wins immediately, with pre-reading Elemental Prep.',

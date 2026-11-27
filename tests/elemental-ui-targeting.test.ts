@@ -221,10 +221,10 @@ describe('Milestone D1.1 — Direct Card-to-Zone Elemental UI Targeting', () => 
       overrideDaysTop: [
         'classic-fire-07', // T1 Event (Treasure)
         'classic-fire-08', // T1 Center (evolves p1 6♣ -> 8♣, hand stays 0!)
+        'classic-water-07', // T1 Right Parallel -> slides into T2 Center! (p2 claims -> p1 earns Water Reader Bonus!)
         'classic-earth-07', // T2 Event (Treasure)
-        'classic-water-07', // T2 Center (p2 discards/claims -> p1 earns Water Reader Bonus)
-        'classic-air-07', // T3 Event
-        'classic-water-06' // T3 Center
+        'classic-water-06', // T2 Right Parallel -> slides into T3 Center
+        'classic-air-07' // T3 Event
       ],
       overrideVeil: ['classic-earth-05']
     });

@@ -47,8 +47,14 @@ describe('Milestone E — 48-Card Classic Courts (Major Arcana), Eclipse, Triang
         ['classic-fire-04', 'classic-earth-05'], // 2-VP Fire card
         ['classic-air-06', 'classic-water-06']
       ],
-      // Event 4♠, Center 2♥, next in Days: 8♦ (Treasure Event), 3♣ (evolves p1 A♠ -> 3♣!)
-      overrideDaysTop: ['classic-air-04', 'classic-water-02', 'classic-earth-08', 'classic-fire-03']
+      // Event 4♠, Center 2♥, Right Parallel 5♥ (3-slot Turn 1 Board), next in Days: 8♦ (Treasure Event), 3♣ (evolves p1 A♠ -> 3♣!)
+      overrideDaysTop: [
+        'classic-air-04',
+        'classic-water-02',
+        'classic-water-05',
+        'classic-earth-08',
+        'classic-fire-03'
+      ]
     });
 
     // Turn 1 starts in AWAITING_ELEMENTAL_ACTION BEFORE Reading!

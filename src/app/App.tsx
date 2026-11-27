@@ -58,6 +58,10 @@ function rulesetToDraft(r: Ruleset): RulesDraftState {
     tieBreak: r.evolutionTieBreak,
     startHand: r.startingHandSize,
     maxHand: r.maxHandSize,
+    preventSetupEvolution: Boolean(r.preventSetupEvolution),
+    replaceCenterOnDiscard: Boolean(r.replaceCenterOnDiscard),
+    emptyChamberMode: Boolean(r.emptyChamberMode),
+    readerBonusAnytimeOnTurn: Boolean(r.readerBonusAnytimeOnTurn),
     readerBonusOnAbandon: r.readerBonusOnAbandon,
     readerBonusPolicy: r.readerBonusPolicy,
     readerBonusConsumesTurnAction: r.readerBonusConsumesTurnAction,
@@ -166,7 +170,7 @@ export function App() {
     void loadActiveSession().then((saved) => {
       if (cancelled) return;
       hydratedRef.current = true;
-      if (!saved || saved.ruleset.version !== '1.5.0' || saved.commands.length <= 1) return;
+      if (!saved || saved.ruleset.version !== '1.6.0' || saved.commands.length <= 1) return;
       // Never silently hijack a fresh Turn 1 opening with a stale mid-turn saved game;
       // offer an explicit one-click Resume banner instead.
       const rep = replay(saved.seed, saved.ruleset, saved.commands);
@@ -549,6 +553,10 @@ export function App() {
       evolutionTieBreak: rulesDraft.tieBreak,
       startingHandSize: rulesDraft.startHand,
       maxHandSize: rulesDraft.maxHand,
+      preventSetupEvolution: rulesDraft.preventSetupEvolution,
+      replaceCenterOnDiscard: rulesDraft.replaceCenterOnDiscard,
+      emptyChamberMode: rulesDraft.emptyChamberMode,
+      readerBonusAnytimeOnTurn: rulesDraft.readerBonusAnytimeOnTurn,
       readerBonusOnAbandon: rulesDraft.readerBonusOnAbandon,
       readerBonusPolicy: rulesDraft.readerBonusPolicy,
       readerBonusConsumesTurnAction: rulesDraft.readerBonusConsumesTurnAction,

@@ -37,6 +37,7 @@ export type GamePhase =
   | 'AWAITING_CENTER_DECISION'
   | 'AWAITING_HAND_DISCARD'
   | 'AWAITING_ELEMENTAL_ACTION'
+  | 'AWAITING_EARTH_REORDER'
   | 'READY_TO_END_TURN'
   | 'GAME_OVER';
 
@@ -100,7 +101,11 @@ export interface Ruleset {
   readonly readingTierHintsEnabled: boolean; // Canonical v0.2 default: false
   readonly readerBonusOnAbandon: boolean; // Creator ruling: false (GOOD requires claim; BAD+DISCARD grants)
   readonly readerBonusPolicy: ReaderBonusPolicy; // Provisional in D1: record_only (MC) | free_tier1_elemental_next_turn (D1)
-  readonly readerBonusConsumesTurnAction: boolean; // Provisional: true (1 elemental action budget per turn)
+  readonly readerBonusConsumesTurnAction: boolean; // true in D1 baseline | false in R1+ (free extra bonus action)
+  readonly readerBonusAnytimeOnTurn?: boolean; // R1: true lets player spend earned Reader Bonus across active phases of their turn
+  readonly preventSetupEvolution?: boolean; // R1 RD-01: true guarantees 3 playable starting hand cards at Turn 1
+  readonly replaceCenterOnDiscard?: boolean; // R1 RD-04 AGREED: true draws & flips replacement Center + Left Event on reject
+  readonly emptyChamberMode?: boolean; // R1 RD-15 AGREED: false fills all 3 Board slots on Turn 1; true leaves Parallel vacant until Major
   readonly rotateEventOnCenterDiscard: boolean; // Provisional: false (MC baseline) | true (D1 cleanup rotation)
   readonly elementalTiming: ElementalTimingPolicy; // 'after_encounter' (D1 baseline) | 'before_reading' (E default)
   readonly elementalNativePrimaryBonusVP: number; // Provisional: 0 (uses exact card VP 1/2/3 by default)
@@ -248,6 +253,7 @@ export type GameEventType =
   | 'ReaderBonusExpired'
   | 'ElementalEffectActivated'
   | 'ElementalEffectResolved'
+  | 'EarthPeekStarted'
   | 'MajorArrived'
   | 'MajorActivated'
   | 'EclipseFormed'
@@ -346,6 +352,19 @@ export type Command =
       readonly playerId: string;
       readonly bonusId: string;
     } & ElementalEffectPayload)
+  // Stage R1 RD-09: Cheat-proof private Earth Peek & Deliberate Reorder on Immediate Future
+  | {
+      readonly type: 'StartEarthPeek';
+      readonly playerId: string;
+      readonly sourceCardId?: string;
+      readonly bonusId?: string;
+    }
+  | {
+      readonly type: 'CommitEarthReorder';
+      readonly playerId: string;
+      readonly newOrder?: readonly string[];
+      readonly moveTopToBottom?: boolean;
+    }
   // Reserved future commands (validated cleanly as FEATURE_DISABLED until their milestone)
   | { readonly type: 'ProposeTrade'; readonly playerId: string; readonly targetPlayerId: string }
   | { readonly type: 'AcceptTrade'; readonly playerId: string; readonly offerId: string }
@@ -374,6 +393,23 @@ export interface GameOutcome {
   readonly summary: string;
 }
 
+export interface PendingEarthReorderState {
+  readonly playerId: string;
+  readonly sourceCommand: 'UseElementalEffect' | 'UseReaderBonus';
+  readonly sourceCardId: string | null;
+  readonly bonusId: string | null;
+  readonly strength: number;
+  readonly peekedCardIds: readonly string[];
+  readonly returnPhase: GamePhase;
+}
+
+export interface ProjectedEarthReorderView {
+  readonly playerId: string;
+  readonly strength: number;
+  readonly count: number;
+  readonly cards: readonly Card[] | null; // Private to active caster (and Admin); null for opponents
+}
+
 export interface GameState {
   readonly engineVersion: string;
   readonly ruleset: Ruleset;
@@ -397,6 +433,7 @@ export interface GameState {
   readonly discardedCenterThisTurn: boolean;
   readonly currentReading: ReadingRecord | null;
   readonly readingHistory: readonly ReadingRecord[];
+  readonly pendingEarthReorder?: PendingEarthReorderState | null;
   readonly majorPending: readonly MajorPendingEntry[];
   readonly players: readonly PlayerState[];
   readonly activeEffects: readonly ActiveEffectEntry[];
@@ -539,6 +576,7 @@ export interface ProjectedGameView {
   readonly abandonedByPlayerId: string | null;
   readonly currentReading: ProjectedReadingView | null;
   readonly readingHistory: readonly ReadingRecord[];
+  readonly pendingEarthReorder: ProjectedEarthReorderView | null;
   readonly board: {
     readonly event: readonly ProjectedBoardSlotItem[];
     readonly center: readonly ProjectedBoardSlotItem[];
