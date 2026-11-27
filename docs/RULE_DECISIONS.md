@@ -37,19 +37,37 @@
   - **Option B — Draw 1 blind replacement card:** Discarding sends Center to Veil, immediately flips a replacement Center from Days, and resolves Left Event against it (cannot discard twice). *(Weakens bluff risk significantly and burns Days faster.)*
 - **Creator Decision:** `PENDING`
 
-### `RD-05` — Reader Bonus Exact Mechanics `[HIGH · BLOCKS R1]`
-- **Problem:** Currently provisional (`free_tier1_elemental_next_turn`): earned on `GOOD + Claim` or `BAD + Discard` (withheld on `GOOD + Abandon`), element = resolved Center card's element, Tier 1 (1 VP), 0 hand cost, consumes the Reader's 1-elemental-action slot next turn, expires at end of that turn.
+### `RD-05` — Reader Bonus Exact Mechanics & Activation Window `[HIGH · BLOCKS R1]`
+- **Creator Input (`27 Nov 2026`):** Locking the bonus strictly to the next turn's opening prep feels disconnected from earning it. Wants Reader Bonus to feel **usable whenever you hold an elemental bonus**, with **explicit element-specific actions** (e.g., *Air: shuffle 1 Board card or 1 card in the Immediate Future (top 3 of Days)*; *Water: resurface 1 card from Veil*; *Fire: burn 1 card from Board or Immediate Future*; *Earth: reorder 1 card from Board or Immediate Future*).
 - **Sub-decisions to lock:**
-  1. **GOOD → PURSUE → ABANDON:** Withhold bonus (`false`, *recommended*) vs. Grant on Pursue (`true`).
-  2. **Action Budget:** Does spending a Reader Bonus consume your 1 normal elemental action that turn (`true`), or is it a **bonus extra action** (`false`, *recommended if you want Reader rewards to feel exciting even when holding strong hand cards*)?
-  3. **Expiry:** Expires if unused on your next turn (*recommended*) vs. persists until spent (max 1 banked).
+  1. **When can you activate a Reader Bonus?**
+     - **Option A — Anytime during YOUR turn *(Recommended for clean multiplayer/bot flow)*:** Bonus unlocks immediately when earned and stays available across your entire next turn (before Reading, during Reading decision, or before End Turn — never locked out just because you clicked `Proceed to Reading`). Zero opponent-turn interruption.
+     - **Option B — Immediate Reaction Window when earned (OR Bank for your turn):** Right after the reading resolves on the other player's turn, Reader gets a quick prompt (`Use Bonus Now` / `Bank for My Turn`). More reactive, but adds a pause during Bot's turn (and future multiplayer handoffs).
+  2. **GOOD → PURSUE → ABANDON:** Withhold bonus (`false`, *recommended*) vs. Grant on Pursue (`true`).
+  3. **Action Budget:** Does spending a Reader Bonus consume your 1 normal hand-card elemental action (`true`), or is it a **separate free bonus action** (`false`, *recommended*)?
+  4. **Expiry:** Expires if unused at the end of your next turn (*recommended*) vs. persists indefinitely until spent (max 1 banked).
 - **Creator Decision:** `PENDING`
 
-### `RD-09` — Earth Reordering Visibility on Deck of Days `[HIGH · BLOCKS R1]`
-- **Problem:** Currently, players activating Earth on Deck of Days see only masked card backs (`Orig #1, #2, #3`), making Earth reordering blind guesswork indistinguishable from Air's shuffle.
-- **Options:**
-  - **Option A — Private temporary peek on Earth activation *(Recommended)*:** Activating an Earth card (`strength = 1..3`) or Earth Reader Bonus commits the activation (consuming the card → Veil), privately reveals the top `strength` cards of Deck of Days **only to the active player** (`AWAITING_EARTH_REORDER` sub-phase), lets them arrange exact order (or place top card on bottom at 1 VP), and confirms. Fully auditable, zero leakage to opponent, preserves `Earth = deliberate order` vs `Air = blind shuffle`.
-  - **Option B — Earth targets Board only unless Reflection/top-reveal is active:** Prohibits blind Days reordering; narrows Earth's utility when Board has few cards.
+### `RD-09` — Earth Inspection Visibility & Air/Fire/Earth "Immediate Future" Scope `[HIGH · BLOCKS R1]`
+- **Creator Input (`27 Nov 2026`):** The top 3 cards (`#1–#3`) of Deck of Days are formally **`The Immediate Future`** (bordered in the Deck browser, `#1` labeled `Next Upcoming`).
+- **Sub-decisions to lock:**
+  1. **Earth Reordering Visibility:**
+     - **Option A — Private temporary peek on Earth activation *(Recommended)*:** Consuming an Earth card (`strength = 1..3`) or Earth Reader Bonus privately reveals the top `strength` cards of the Immediate Future **only to the active player** (`AWAITING_EARTH_REORDER`), lets them arrange exact order, and confirms (zero leakage to opponent).
+     - **Option B — Earth targets Board only unless Reflection/top-reveal is active.**
+  2. **Air Shuffle Scope on Deck of Days:**
+     - **Option A — Shuffle selected Board card(s) and/or top `strength` Immediate Future cards into the full Deck of Days *(current behavior)*.**
+     - **Option B — Shuffle strictly within the Immediate Future (top 3 cards) when targeting Days**, leaving cards `#4..#N` untouched.
+- **Creator Decision:** `PENDING`
+
+### `RD-15` — Turn-1 3-Card Board & Right-Slot (`Parallel`) Minor Card Lifecycle `[CRITICAL · BLOCKS R1/R2]`
+- **Creator Ruling (`27 Nov 2026`, AGREED):** Turn 1 draws **3 cards** across all 3 Board slots (`Event`, `Center`, `Parallel`), NOT 2. Leaving Parallel empty until a Major surfaces becomes an optional setting: `emptyChamberMode` (default `false`).
+- **Open Mechanical Question:** When `emptyChamberMode = false` and a **Minor card** sits in the rightmost (`Parallel`) slot, how does it move on subsequent turns?
+  - **Option A — 3-Slot Conveyor Slide (`Deck → Right → Center → Left Event → Veil`) *(Recommended)*:**
+    - Turn 1 deals 3 face-down cards: `Left Event`, `Center` (read this turn), and `Right` (next turn's incoming card — face-down if Minor so it doesn't spoil the next reading, face-up if Major/Court!).
+    - At turn refresh, resolved `Left Event` → Veil; **`Right` slides left into `Center` (or `Left Event`)**, and 1 fresh card is drawn from Deck of Days into `Right`!
+    - *Note:* If a **Major/Court** lands in `Right` (or slides), specify whether it stays anchored in `Right` while Minors flow into `Event`/`Center`, OR slides with the conveyor (which naturally enables Eclipse & Triangulation!).
+  - **Option B — Right holds next turn's Left Event (`Right → Event`), while Center draws fresh from Days:** Right is face-down "next Event", keeping Center readings fresh from Days.
+  - **Option C — Right is a live face-up/face-down 3rd Board card targetable by Air/Fire/Earth, cycling to Veil at end of turn:** Faster deck burn; no sliding queue.
 - **Creator Decision:** `PENDING`
 
 ---

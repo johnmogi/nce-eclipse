@@ -29,10 +29,12 @@
 - **Deliverables:** `docs/GAMEPLAY_CONTRACT.md`, `docs/RULE_DECISIONS.md`, `docs/ACCEPTANCE_PLAN.md`.
 - **Exit Gate:** Creator reviews compliance matrix and signs off on `RD-01` through `RD-05` & `RD-09` (unlocking R1).
 
-### Stage R1 — First-Turn Reliability, Earth Visibility & Browser E2E
+### Stage R1 — First-Turn Reliability, Immediate Future UX, Reader Bonus & Browser E2E
 - **Scope:**
   - Fix starting-hand setup invariant (`RD-01`) and hand limit (`RD-02`) so every new game begins with 3 playable cards.
-  - Lock `DiscardCenter` flow (`RD-04`) and Reader Bonus behavior (`RD-05`).
+  - Implement Turn-1 3-card Board population + optional `emptyChamberMode` ruleset toggle (`RD-15`).
+  - Upgrade Deck of Days browser with explicit left-to-right flow, `#1` labeled **`Next Upcoming`**, and bordered **`Immediate Future (Next 3 Cards)`** (`#1–#3`).
+  - Lock `DiscardCenter` flow (`RD-04`) and flexible Reader Bonus timing with explicit element-specific Tier-1 action descriptions (`RD-05`).
   - Fix Earth Deck-of-Days private temporary peek & deliberate reorder (`RD-09`).
   - Split `GameTable.tsx` into modular subcomponents for maintainability.
   - Add **Playwright browser E2E suite** (`npm run test:e2e`) running against the real built Vite app.

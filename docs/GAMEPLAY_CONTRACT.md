@@ -19,6 +19,9 @@
    - Elemental prep timing requested before Reading (`Milestone E`, confirmed intent — interaction with turn-start refill pending sign-off).
    - Starting experience must provide 3 playable hand cards (`Playtest feedback`, requires setup rule lock in `RD-01`).
    - Classic prototype must be distinguishable from bespoke Sun/Moon Major Arcana.
+   - **Deck of Days "Immediate Future" UX (`27 Nov 2026`, confirmed):** Deck browser reads left-to-right; card `#1` is labeled **`Next Upcoming`** (not `Top`), and cards `#1–#3` are visually bordered as **`Immediate Future (Next 3 Cards)`**.
+   - **Turn 1 populates all 3 Board slots (`27 Nov 2026`, confirmed):** Turn 1 deals **3 cards** across `Event`, `Center`, and `Parallel` (not 2); keeping Parallel vacant until a Major surfaces is an optional `emptyChamberMode` setting (default `false`).
+   - **Flexible Reader Bonus timing & explicit element actions (`27 Nov 2026`, direction confirmed; exact interrupt window in `RD-05`).**
 2. **Executive Blueprint v0.2** (`26 Nov 2026`, Milestone C handoff / rules contract) — **Present & verified.**
 3. **Game Design Document (GDD) v0.1** (`26 Nov 2026`, player-facing design & lore) — **Present & verified.**
 4. **Developer Specification Blueprint v0.1** (`26 Nov 2026`, domain model & NCE architecture) — **Present & verified.**
@@ -61,9 +64,10 @@
    - **CRITICAL OPEN CONFLICT (`RD-01`):** Currently `setup.ts` runs mandatory chained evolution immediately on the dealt 3-card starting hand. On seeds like `eclipse-me-001`, all 3 cards (`3♠, 4♠, 6♣`) are immediately consumed into lineage before Turn 1, leaving Player 1 with **0 playable cards** while Bot holds 3. **Creator must approve `RD-01`** (e.g., refill hand back to 3 after setup evolution with a chain safeguard, or defer evolution until Turn 1).
 4. **Hand Size Limit `[OPEN — RD-02]`:**
    - Currently `maxHandSize = 5` across presets (`[PROVISIONAL]`). Creator feedback on Turn 1 requested investigating `3` vs `5` as default hand limit. Requires explicit lock in `RD-02`.
-5. **Initial Board Setup `[PROVISIONAL — RD-06]`:**
-   - Populate Left Event (face-down Minor) and Center (face-down Minor) from Deck of Days.
-   - Handling of any Court/Major drawn during Turn 1 setup must obey the approved R2 Major lifecycle (`RD-06`), with a cap preventing accidental Turn-0 victory.
+5. **Initial Board Setup `[AGREED 3-card start / OPEN slide rule RD-15]`:**
+   - **Default (`emptyChamberMode = false` `[AGREED]`):** Turn 1 populates **all 3 Board slots** (`Event`, `Center`, and `Parallel`) with 3 drawn cards so the Right chamber is not left empty.
+   - **Optional setting (`emptyChamberMode = true` `[PROVISIONAL]`):** Leaves Right Parallel vacant at setup and until a Major surfaces (configurable in Rules/Lab).
+   - **OPEN (`RD-15`):** Exact lifecycle of a Minor card sitting in the Right (`Parallel`) slot (e.g., face-down conveyor slide `Parallel → Center` vs `Parallel → Event` on turn refresh, and how arriving Majors interact with that slide) must be locked before R1/R2 implementation.
 
 ---
 
@@ -144,12 +148,13 @@
 
 - **Activation Cost `[AGREED]`:** Selecting 1 card from hand consumes that card atomically from **Hand → Veil**. Strength = consumed card's original VP (`1–3`, no silent `VP+1` scaling). Counts toward max 1 elemental action per turn.
 - **Validation Atomicity `[AGREED]`:** Every target/zone constraint is validated *before* mutating state; invalid commands never consume the card.
-- **Four Elemental Verbs `[AGREED core / OPEN Earth inspection RD-09]`:**
-  - **Air `♠` (Shuffle):** Shuffles up to `strength` cards from Board (`event`/`center`/`parallel`) and/or Deck of Days unpredictably into Deck of Days.
-  - **Fire `♣` (Burn):** Sends up to `strength` cards from Board (`event`/`center`/`parallel`) and/or top of Deck of Days directly to the Veil.
+- **Four Elemental Verbs `[AGREED core / OPEN Earth inspection & Immediate Future scope RD-09]`:**
+  - **Immediate Future `[AGREED terminology]`:** The top 3 cards (`#1–#3`) of Deck of Days are formally named **the Immediate Future**, visually bordered in the Deck browser with `#1` labeled **`Next Upcoming`** and clear left-to-right draw flow.
+  - **Air `♠` (Shuffle):** Shuffles up to `strength` cards from Board (`event`/`center`/`parallel`) and/or the **Immediate Future** (top 3 of Deck of Days) unpredictably. *(Exact shuffle scope — into full Deck vs within Immediate Future — locked in `RD-09`.)*
+  - **Fire `♣` (Burn):** Sends up to `strength` cards from Board (`event`/`center`/`parallel`) and/or the **Immediate Future** (top of Deck of Days) directly to the Veil.
   - **Water `♥` (Resurface):** Returns `1..strength` cards from Veil → Deck of Days (`shuffled` default `[PROVISIONAL]`; `top`/`bottom` configurable).
     - **Self-resurface prohibition `[AGREED]`:** The consumed Water card is strictly excluded from eligible Veil targets during the same activation (`WATER_SELF_RESURFACE_FORBIDDEN`).
-  - **Earth `♦` (Reorder):** Deliberately repositions up to `strength` cards on Board and/or top of Deck of Days.
+  - **Earth `♦` (Reorder):** Deliberately repositions up to `strength` cards on Board and/or the **Immediate Future** (top of Deck of Days).
     - **CRITICAL OPEN DEFECT (`RD-09`):** Currently, player views mask all Deck of Days cards (`daysCards: null`), so the Earth UI asks players to reorder identical face-down backs (`Orig #1 / Orig #2 / Orig #3`). Without a private temporary peek at the top `strength` cards during Earth activation, Earth cannot provide *deliberate* control distinct from Air's shuffle. Creator must lock `RD-09`.
 - **Pre-Reading Board Refill `[PROVISIONAL]`:** If pre-reading Air/Fire/Earth clears Event or Center, `AdvanceToReading` refills the empty slot before Reading begins (triggering combo checks if a Major arrives).
 
@@ -230,3 +235,4 @@
 | **C8** | **Classic Courts vs Sun/Moon Major Labeling** | UI & logs clearly distinguish 12 Classic Court proxies from the 20 future Sun/Moon Major Arcana. | Events and UI badges say `"Major Arcana arrived"` / `"Major +3"` without clarifying Classic Court proxy status. | `src/engine/majors.ts`, `src/app/components/GameTable.tsx`, `src/app/components/DeckView.tsx` | **Medium** | Label Classic mode explicitly as `"Classic Court (Major Proxy)"` across UI, Deck Catalogue, and events; keep Sun/Moon clearly marked as R5 expansion. | Browser E2E assertion + catalogue check verifying accurate proxy labeling. |
 | **C9** | **No Automated Browser E2E & Unactivated CI** | Real browser E2E tests catch broken controls/empty hands before handoff; GitHub Actions CI runs on PRs. | Only Vitest unit/sim tests run (53/53); zero Playwright browser tests; CI file parked at `docs/ci-workflow.yml` pending OAuth `workflow` scope. | `package.json`, `docs/ci-workflow.yml` | **High** | Add Playwright E2E suite in R1 covering Turn 1–3 Human vs Bot, Reader Bonus, Earth peek, and Eclipse; activate `.github/workflows/ci.yml` once user refreshes `gh` scope. | `npm run test:e2e` passes headlessly against built app; GitHub Actions green on every PR. |
 | **C10** | **UI Monolith (`GameTable.tsx`) & PR Bloat** | Small, single-objective PRs; maintainable modular components. | `GameTable.tsx` is ~1,400 lines (60 KB); PR #1 combines D0 + D1 + D1.1 + D1.2 + D1.3 + E in one >10k-line diff. | `src/app/components/GameTable.tsx`, branch `feature/d1-elemental-gameplay` | **Medium** | Preserve PR #1 as reference baseline; split `GameTable.tsx` into focused subcomponents during R1/R2; enforce one-objective-per-PR going forward. | Clean small PR diffs per recovery stage R1–R5. |
+| **C11** | **Turn-1 3-Card Board & Immediate Future Browser (`RD-15`)** | Turn 1 populates all 3 Board slots (`emptyChamberMode = false` default); Deck of Days labels `#1` as `Next Upcoming` and borders `#1–#3` as **Immediate Future**. | `setup.ts` only populates 2 slots (leaving Parallel empty until a Court arrives); `DeckDaysBrowser.tsx` labels `#1` as `Top` with no 3-card Immediate Future border or explicit flow arrow. | `src/engine/setup.ts`, `src/app/components/DeckDaysBrowser.tsx` | **High** | Add `emptyChamberMode` setting (default `false`), implement approved `RD-15` 3-slot flow, and update Deck browser with `Next Upcoming` + bordered **Immediate Future (#1–#3)** framing. | Browser E2E verifies Turn 1 has 3 populated Board slots and Deck browser borders `#1–#3` as Immediate Future with `#1 = Next Upcoming`. |
