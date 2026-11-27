@@ -34,7 +34,8 @@
   - Fix starting-hand setup invariant (`RD-01`) and hand limit (`RD-02`) so every new game begins with 3 playable cards.
   - Implement Turn-1 3-card Board population + optional `emptyChamberMode` ruleset toggle (`RD-15`).
   - Upgrade Deck of Days browser with explicit left-to-right flow, `#1` labeled **`Next Upcoming`**, and bordered **`Immediate Future (Next 3 Cards)`** (`#1–#3`).
-  - Lock `DiscardCenter` flow (`RD-04`) and flexible Reader Bonus timing with explicit element-specific Tier-1 action descriptions (`RD-05`).
+  - Implement **`RD-04` (AGREED)** `replaceCenterOnDiscard: true`: rejecting the read Center card sends it face-up to Veil, draws & flips 1 replacement Center card, and flips Left Event into `AWAITING_EVENT_RESOLUTION` (preserving `false` on legacy `poker-proto-c` / `poker-proto-d1`).
+  - Lock flexible Reader Bonus timing & explicit element-specific Tier-1 action descriptions (`RD-05`).
   - Fix Earth Deck-of-Days private temporary peek & deliberate reorder (`RD-09`).
   - Split `GameTable.tsx` into modular subcomponents for maintainability.
   - Add **Playwright browser E2E suite** (`npm run test:e2e`) running against the real built Vite app.

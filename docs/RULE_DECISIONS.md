@@ -30,12 +30,12 @@
   - **Option C — Flexible (either before OR after, still max 1 per turn):** Allows acting before Reading *or* after Encounter, never both. *(Adds one extra click on turns where you don't use an element.)*
 - **Creator Decision:** `PENDING`
 
-### `RD-04` — What Happens After Following `BAD` Advice (`DiscardCenter`) `[HIGH · BLOCKS R1]`
-- **Problem:** Executive Blueprint v0.2 §4.4 states `DiscardCenter` moves Center to Veil and ends the encounter for that turn (no replacement card). However, a playtest comment asked whether discarding after `BAD` advice should deal a new card for the player to resolve.
-- **Options:**
-  - **Option A — No replacement draw (Executive Blueprint v0.2 canon) *(Recommended)*:** Following `BAD` advice discards the concealed card to the Veil, grants the Reader their bonus, and finishes the encounter. This keeps `BAD` advice strategically weighty (risking a bluff costs you your turn's acquisition).
-  - **Option B — Draw 1 blind replacement card:** Discarding sends Center to Veil, immediately flips a replacement Center from Days, and resolves Left Event against it (cannot discard twice). *(Weakens bluff risk significantly and burns Days faster.)*
-- **Creator Decision:** `PENDING`
+### `RD-04` — What Happens After Rejecting the Read Card (`DiscardCenter`) `[AGREED · LOCKED 27 NOV 2026]`
+- **Creator Ruling (Overrides Executive Blueprint v0.2 §4.4 per §9 Precedence):**
+  - **LOCKED — Option B (Reject & Draw Replacement):** When the active player rejects/discards the read Center card, that card moves **face-up to the Veil** (exposing truthfulness/bluff), the player **receives a new card from Deck of Days** flipped face-up in Center (no second reject), AND **Left Event flips face-up** to determine the encounter reality (Treasure / Barrier / Trial).
+  - *Implementation flag:* `replaceCenterOnDiscard: true` on active Classic presets (`false` retained strictly on legacy `poker-proto-c` / `poker-proto-d1` historical baselines).
+  - *Side-note on pacing:* Each rejection consumes 1 additional Day from Deck of Days — adding real clock pressure while ensuring no player loses their turn before it begins.
+- **Creator Decision:** **`AGREED — OPTION B (LOCKED)`**
 
 ### `RD-05` — Reader Bonus Exact Mechanics & Activation Window `[HIGH · BLOCKS R1]`
 - **Creator Input (`27 Nov 2026`):** Locking the bonus strictly to the next turn's opening prep feels disconnected from earning it. Wants Reader Bonus to feel **usable whenever you hold an elemental bonus**, with **explicit element-specific actions** (e.g., *Air: shuffle 1 Board card or 1 card in the Immediate Future (top 3 of Days)*; *Water: resurface 1 card from Veil*; *Fire: burn 1 card from Board or Immediate Future*; *Earth: reorder 1 card from Board or Immediate Future*).
@@ -43,9 +43,12 @@
   1. **When can you activate a Reader Bonus?**
      - **Option A — Anytime during YOUR turn *(Recommended for clean multiplayer/bot flow)*:** Bonus unlocks immediately when earned and stays available across your entire next turn (before Reading, during Reading decision, or before End Turn — never locked out just because you clicked `Proceed to Reading`). Zero opponent-turn interruption.
      - **Option B — Immediate Reaction Window when earned (OR Bank for your turn):** Right after the reading resolves on the other player's turn, Reader gets a quick prompt (`Use Bonus Now` / `Bank for My Turn`). More reactive, but adds a pause during Bot's turn (and future multiplayer handoffs).
-  2. **GOOD → PURSUE → ABANDON:** Withhold bonus (`false`, *recommended*) vs. Grant on Pursue (`true`).
-  3. **Action Budget:** Does spending a Reader Bonus consume your 1 normal hand-card elemental action (`true`), or is it a **separate free bonus action** (`false`, *recommended*)?
-  4. **Expiry:** Expires if unused at the end of your next turn (*recommended*) vs. persists indefinitely until spent (max 1 banked).
+  2. **On `BAD` advice + Reject/Replace (`RD-04`), which card grants the Reader Bonus?**
+     - **Option A — Discarded Card 1 immediately on Reject *(Recommended — matches "the opinion is about that card")*:** Reader advised `BAD` on Card 1; player followed that opinion and sent Card 1 to Veil → Reader immediately earns Card 1's element bonus regardless of what happens to replacement Card 2.
+     - **Option B — Replacement Card 2 only if claimed:** Reader earns Card 2's element only if the active player reconciles and claims Card 2.
+  3. **GOOD → PURSUE → ABANDON:** Withhold bonus (`false`, *recommended*) vs. Grant on Pursue (`true`).
+  4. **Action Budget:** Does spending a Reader Bonus consume your 1 normal hand-card elemental action (`true`), or is it a **separate free bonus action** (`false`, *recommended*)?
+  5. **Expiry:** Expires if unused at the end of your next turn (*recommended*) vs. persists indefinitely until spent (max 1 banked).
 - **Creator Decision:** `PENDING`
 
 ### `RD-09` — Earth Inspection Visibility & Air/Fire/Earth "Immediate Future" Scope `[HIGH · BLOCKS R1]`
