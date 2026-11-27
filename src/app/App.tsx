@@ -19,7 +19,14 @@ import {
   type Ruleset,
   type Viewer
 } from '../engine/index.js';
-import { chooseNextCommand, chooseReaderAdvice, type AgentPolicyId } from '../sim/agents.js';
+import type { AgentPolicyId } from '../sim/agents.js';
+import {
+  advanceAutomatedStepsUntilHumanTurn,
+  getAutomatedActorId,
+  runOneAutomatedStep,
+  type HumanVsBotConfig,
+  type PlayControlMode
+} from '../sim/botController.js';
 import { runSimulationBatch, type BatchSimulationSummary } from '../sim/runner.js';
 import { DeckView } from './components/DeckView.js';
 import { GameTable } from './components/GameTable.js';
@@ -42,6 +49,7 @@ type ActiveTab = 'play' | 'deck' | 'rules' | 'lab';
 
 const DEFAULT_PRESET_ID = 'poker-proto-d1';
 const DEFAULT_SEED = 'eclipse-d1-001';
+const HUMAN_PLAYER_ID = 'p1';
 
 function rulesetToDraft(r: Ruleset): RulesDraftState {
   return {
@@ -62,21 +70,54 @@ function rulesetToDraft(r: Ruleset): RulesDraftState {
   };
 }
 
+function createInitialPlayState(
+  ruleset: Ruleset,
+  seed: string,
+  config: HumanVsBotConfig
+): { state: GameState; initialBotNote: string | null } {
+  const fresh = createGame(ruleset, seed);
+  if (config.mode !== 'human-vs-bot') {
+    return { state: fresh, initialBotNote: null };
+  }
+  // In Human vs Bot, Bot (p2) automatically delivers Turn 1's opening reading so Player 1 can play immediately!
+  const advanced = advanceAutomatedStepsUntilHumanTurn(fresh, config, 8);
+  const lastEvent = advanced.state.events[advanced.state.events.length - 1];
+  return {
+    state: advanced.state,
+    initialBotNote: advanced.executed.length > 0 && lastEvent ? lastEvent.summary : null
+  };
+}
+
 export function App() {
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
   const [tab, setTab] = useState<ActiveTab>('play');
   const [inspectorOpen, setInspectorOpen] = useState<boolean>(false);
 
+  // D1.2 Default: Human (p1) vs Autonomous Bot (p2)
+  const [controlMode, setControlMode] = useState<PlayControlMode>('human-vs-bot');
+  const [fastTestAutoHumanReading, setFastTestAutoHumanReading] = useState<boolean>(false);
+  const [botPolicy, setBotPolicy] = useState<AgentPolicyId>('bluffing-rival');
+  const [autoPlayMs, setAutoPlayMs] = useState<number>(600);
+  const [replayPlaying, setReplayPlaying] = useState<boolean>(false);
+
   const [ruleset, setRuleset] = useState<Ruleset>(RULESET_PRESETS[DEFAULT_PRESET_ID]!);
   const [seed, setSeed] = useState<string>(DEFAULT_SEED);
-  const [liveState, setLiveState] = useState<GameState>(() =>
-    createGame(RULESET_PRESETS[DEFAULT_PRESET_ID]!, DEFAULT_SEED)
+
+  const initialBoot = useMemo(
+    () =>
+      createInitialPlayState(RULESET_PRESETS[DEFAULT_PRESET_ID]!, DEFAULT_SEED, {
+        mode: 'human-vs-bot',
+        humanPlayerId: HUMAN_PLAYER_ID,
+        botPolicy: 'bluffing-rival',
+        fastTestAutoHumanReading: false
+      }),
+    []
   );
-  const [viewer, setViewer] = useState<Viewer>({ role: 'player', playerId: 'p1' });
+
+  const [liveState, setLiveState] = useState<GameState>(initialBoot.state);
+  const [lastBotSummary, setLastBotSummary] = useState<string | null>(initialBoot.initialBotNote);
+  const [viewer, setViewer] = useState<Viewer>({ role: 'player', playerId: HUMAN_PLAYER_ID });
   const [timelineStep, setTimelineStep] = useState<number | null>(null);
-  const [autoPlayMode, setAutoPlayMode] = useState<'off' | 'live' | 'replay'>('off');
-  const [autoPlayMs, setAutoPlayMs] = useState<number>(850);
-  const [readerBotPolicy, setReaderBotPolicy] = useState<AgentPolicyId>('bluffing-rival');
 
   // Direct card-to-zone interaction state
   const [selectedSacrificeIds, setSelectedSacrificeIds] = useState<string[]>([]);
@@ -103,6 +144,16 @@ export function App() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const hydratedRef = useRef(false);
 
+  const hvbConfig: HumanVsBotConfig = useMemo(
+    () => ({
+      mode: controlMode,
+      humanPlayerId: HUMAN_PLAYER_ID,
+      botPolicy,
+      fastTestAutoHumanReading
+    }),
+    [controlMode, botPolicy, fastTestAutoHumanReading]
+  );
+
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
   }, [theme]);
@@ -112,7 +163,7 @@ export function App() {
     void loadActiveSession().then((saved) => {
       if (cancelled) return;
       hydratedRef.current = true;
-      if (!saved || saved.ruleset.version !== '1.4.0') return;
+      if (!saved || saved.ruleset.version !== '1.4.0' || saved.commands.length === 0) return;
       const rep = replay(saved.seed, saved.ruleset, saved.commands);
       if (rep.ok) {
         setRuleset(saved.ruleset);
@@ -148,39 +199,56 @@ export function App() {
     return replay(liveState.seed, liveState.ruleset, cmds).snapshots;
   }, [liveState]);
 
+  const isViewingHistory =
+    timelineStep !== null && timelineStep < timelineSnapshots.length - 1;
+
+  // Replay playback timer (strictly separate from Bot player automation!)
   useEffect(() => {
-    if (autoPlayMode === 'off') return;
+    if (!replayPlaying) return;
     const timer = window.setInterval(() => {
-      if (autoPlayMode === 'replay') {
-        setTimelineStep((prev) => {
-          const next = (prev ?? 0) + 1;
-          if (next >= timelineSnapshots.length - 1) {
-            setAutoPlayMode('off');
-            return null;
-          }
-          return next;
-        });
-      } else if (autoPlayMode === 'live') {
-        setLiveState((prev) => {
-          if (prev.status !== 'playing') {
-            setAutoPlayMode('off');
-            return prev;
-          }
-          const cmd = chooseNextCommand(prev, readerBotPolicy);
-          if (!cmd) {
-            setAutoPlayMode('off');
-            return prev;
-          }
-          const res = dispatch(prev, cmd);
-          if (!res.ok || res.state.status !== 'playing') {
-            setAutoPlayMode('off');
-          }
-          return res.state;
-        });
-      }
+      setTimelineStep((prev) => {
+        const next = (prev ?? 0) + 1;
+        if (next >= timelineSnapshots.length - 1) {
+          setReplayPlaying(false);
+          return null;
+        }
+        return next;
+      });
     }, autoPlayMs);
     return () => window.clearInterval(timer);
-  }, [autoPlayMode, autoPlayMs, readerBotPolicy, timelineSnapshots.length]);
+  }, [replayPlaying, autoPlayMs, timelineSnapshots.length]);
+
+  // Autonomous Fair Bot Loop (in `human-vs-bot` ONLY controls Bot — NEVER Human's turn!)
+  const pendingAutoActorId = useMemo(() => {
+    if (isViewingHistory || replayPlaying || tab !== 'play') return null;
+    return getAutomatedActorId(liveState, hvbConfig);
+  }, [liveState, hvbConfig, isViewingHistory, replayPlaying, tab]);
+
+  useEffect(() => {
+    if (!pendingAutoActorId) return;
+    const delayMs =
+      controlMode === 'auto-sim'
+        ? Math.min(autoPlayMs, 420)
+        : fastTestAutoHumanReading
+          ? 180
+          : 520;
+
+    const timer = window.setTimeout(() => {
+      setLiveState((prev) => {
+        const step = runOneAutomatedStep(prev, hvbConfig);
+        if (!step) return prev;
+        const latestPublic = [...step.state.events]
+          .reverse()
+          .find((e) => e.visibility === 'public' && e.type !== 'TurnStarted');
+        if (latestPublic) {
+          setLastBotSummary(latestPublic.summary);
+        }
+        return step.state;
+      });
+    }, delayMs);
+
+    return () => window.clearTimeout(timer);
+  }, [pendingAutoActorId, hvbConfig, controlMode, fastTestAutoHumanReading, autoPlayMs, liveState.commandHistory.length]);
 
   const inspectedState: GameState = useMemo(() => {
     if (timelineStep === null) return liveState;
@@ -188,24 +256,27 @@ export function App() {
     return timelineSnapshots[clamped]?.state ?? liveState;
   }, [liveState, timelineSnapshots, timelineStep]);
 
-  const isViewingHistory =
-    timelineStep !== null && timelineStep < timelineSnapshots.length - 1;
-
   const view = useMemo(() => projectView(inspectedState, viewer), [inspectedState, viewer]);
   const invariantReport = useMemo(() => checkInvariants(inspectedState), [inspectedState]);
   const activePlayer = view.players.find((p) => p.id === view.activePlayerId)!;
 
+  const isBotActing = Boolean(pendingAutoActorId);
+
   const canActAsActivePlayer =
     !isViewingHistory &&
+    !isBotActing &&
     view.status === 'playing' &&
-    (viewer.role === 'admin' || viewer.playerId === view.activePlayerId);
+    (viewer.role === 'admin' || viewer.playerId === view.activePlayerId) &&
+    (controlMode !== 'human-vs-bot' || view.activePlayerId === HUMAN_PLAYER_ID);
 
   const canActAsReader =
     !isViewingHistory &&
+    !isBotActing &&
     view.status === 'playing' &&
     view.phase === 'AWAITING_READING' &&
     view.currentReading !== null &&
-    (viewer.role === 'admin' || viewer.playerId === view.currentReading.readerId);
+    (viewer.role === 'admin' || viewer.playerId === view.currentReading.readerId) &&
+    (controlMode !== 'human-vs-bot' || view.currentReading.readerId === HUMAN_PLAYER_ID);
 
   const elementalCtx = useMemo(
     () => getElementalTargetContext(view, activePlayer, elementalSelection),
@@ -283,34 +354,62 @@ export function App() {
     nextRuleset: Ruleset,
     nextSeed: string,
     initialCommands: readonly Command[] = [],
-    options: { startAtStepZero?: boolean; autoPlayReplay?: boolean } = {}
+    options: {
+      startAtStepZero?: boolean;
+      autoPlayReplay?: boolean;
+      nextMode?: PlayControlMode;
+    } = {}
   ) {
-    setAutoPlayMode('off');
+    const modeToUse = options.nextMode ?? controlMode;
+    setReplayPlaying(false);
     setSelectedSacrificeIds([]);
     setElementalSelection(INITIAL_ELEMENTAL_SELECTION);
     setVeilTrayOpen(false);
-    const rep = replay(nextSeed, nextRuleset, initialCommands);
-    if (!rep.ok) {
-      setNotice(`Failed to initialize seed "${nextSeed}": ${rep.error?.message ?? 'unknown error'}`);
+
+    if (initialCommands.length > 0) {
+      const rep = replay(nextSeed, nextRuleset, initialCommands);
+      if (!rep.ok) {
+        setNotice(`Failed to initialize seed "${nextSeed}": ${rep.error?.message ?? 'unknown error'}`);
+        return;
+      }
+      setRuleset(nextRuleset);
+      setSeed(nextSeed);
+      setDraftSeedInput(nextSeed);
+      setRulesDraft(rulesetToDraft(nextRuleset));
+      setLiveState(rep.finalState);
+      setLastBotSummary(null);
+      if (options.startAtStepZero) {
+        setTimelineStep(0);
+        setInspectorOpen(true);
+        if (options.autoPlayReplay) setReplayPlaying(true);
+      } else {
+        setTimelineStep(null);
+      }
+      setNotice(null);
       return;
     }
+
+    const boot = createInitialPlayState(nextRuleset, nextSeed, {
+      mode: modeToUse,
+      humanPlayerId: HUMAN_PLAYER_ID,
+      botPolicy,
+      fastTestAutoHumanReading
+    });
     setRuleset(nextRuleset);
     setSeed(nextSeed);
     setDraftSeedInput(nextSeed);
     setRulesDraft(rulesetToDraft(nextRuleset));
-    setLiveState(rep.finalState);
-    if (options.startAtStepZero && initialCommands.length > 0) {
-      setTimelineStep(0);
-      setInspectorOpen(true);
-      if (options.autoPlayReplay) setAutoPlayMode('replay');
-    } else {
-      setTimelineStep(null);
+    setLiveState(boot.state);
+    setLastBotSummary(boot.initialBotNote);
+    if (modeToUse === 'human-vs-bot') {
+      setViewer({ role: 'player', playerId: HUMAN_PLAYER_ID });
     }
+    setTimelineStep(null);
     setNotice(null);
   }
 
   function sendCommand(command: Command) {
-    setAutoPlayMode('off');
+    setReplayPlaying(false);
     if (isViewingHistory) {
       setNotice('Timeline is paused on a historical step. Click “Return to Live” to play.');
       return;
@@ -371,45 +470,6 @@ export function App() {
     setElementalSelection((prev) => toggleVeilTargetSelection(prev, cardId, elementalCtx));
   }
 
-  function triggerBotReading() {
-    if (isViewingHistory || liveState.phase !== 'AWAITING_READING' || !liveState.currentReading) return;
-    const advice = chooseReaderAdvice(liveState, readerBotPolicy);
-    sendCommand({
-      type: 'GiveReading',
-      playerId: liveState.currentReading.readerId,
-      advice
-    });
-  }
-
-  function stepOneBotMove() {
-    setAutoPlayMode('off');
-    if (isViewingHistory) {
-      const next = (timelineStep ?? 0) + 1;
-      setTimelineStep(next >= timelineSnapshots.length - 1 ? null : next);
-      return;
-    }
-    const nextCmd = chooseNextCommand(liveState, readerBotPolicy);
-    if (!nextCmd) return;
-    sendCommand(nextCmd);
-  }
-
-  function toggleAutoWatch() {
-    if (autoPlayMode !== 'off') {
-      setAutoPlayMode('off');
-      return;
-    }
-    if (isViewingHistory) {
-      setAutoPlayMode('replay');
-      return;
-    }
-    if (liveState.status === 'completed' && timelineSnapshots.length > 1) {
-      setTimelineStep(0);
-      setAutoPlayMode('replay');
-      return;
-    }
-    setAutoPlayMode('live');
-  }
-
   function toggleSacrifice(cardId: string) {
     setSelectedSacrificeIds((prev) =>
       prev.includes(cardId) ? prev.filter((id) => id !== cardId) : [...prev, cardId]
@@ -467,7 +527,7 @@ export function App() {
         setLiveState(rep.finalState);
         setTimelineStep(0);
         setInspectorOpen(true);
-        setAutoPlayMode('off');
+        setReplayPlaying(false);
         setNotice(
           hashMatches
             ? `Imported & verified replay (${parsed.commands.length} commands · hash ${rep.finalState.stateHash} exact match).`
@@ -567,7 +627,7 @@ export function App() {
 
           <input
             className="input mono input-compact"
-            style={{ width: 118 }}
+            style={{ width: 112 }}
             value={draftSeedInput}
             onChange={(e) => setDraftSeedInput(e.target.value)}
             placeholder="seed"
@@ -581,24 +641,64 @@ export function App() {
         </div>
 
         <div className="toolbar-group">
-          {view.players.map((p) => (
+          {/* Play Control Mode Switcher (Default: Human vs Bot) */}
+          <button
+            className={`btn btn-sm ${controlMode === 'human-vs-bot' ? 'btn-active' : ''}`}
+            onClick={() => {
+              setControlMode('human-vs-bot');
+              setViewer({ role: 'player', playerId: HUMAN_PLAYER_ID });
+            }}
+          >
+            Human vs Bot
+          </button>
+          <button
+            className={`btn btn-sm ${controlMode === 'hotseat' ? 'btn-active' : ''}`}
+            onClick={() => setControlMode('hotseat')}
+          >
+            Hotseat
+          </button>
+          <button
+            className={`btn btn-sm ${controlMode === 'auto-sim' ? 'btn-active' : ''}`}
+            onClick={() => setControlMode('auto-sim')}
+          >
+            Auto-Sim
+          </button>
+
+          {controlMode === 'human-vs-bot' && (
             <button
-              key={p.id}
-              className={`btn btn-sm ${
-                viewer.role === 'player' && viewer.playerId === p.id ? 'btn-active' : ''
-              }`}
-              onClick={() => setViewer({ role: 'player', playerId: p.id })}
+              className={`btn btn-sm ${fastTestAutoHumanReading ? 'btn-active' : ''}`}
+              title="Optional Fast Test: auto-delivers your Reader advice for Bot while still keeping all your own turn decisions manual."
+              onClick={() => setFastTestAutoHumanReading((v) => !v)}
             >
-              {p.name}
-              {p.isCurrentReader ? ' (Reader)' : p.isActive ? ' (Active)' : ''}
+              {fastTestAutoHumanReading ? 'Fast Test: On' : 'Fast Test'}
             </button>
-          ))}
+          )}
+
+          {controlMode === 'hotseat' &&
+            view.players.map((p) => (
+              <button
+                key={p.id}
+                className={`btn btn-sm ${
+                  viewer.role === 'player' && viewer.playerId === p.id ? 'btn-active' : ''
+                }`}
+                onClick={() => setViewer({ role: 'player', playerId: p.id })}
+              >
+                {p.name}
+              </button>
+            ))}
+
           <button
             className={`btn btn-sm ${viewer.role === 'admin' ? 'btn-active' : ''}`}
-            onClick={() => setViewer({ role: 'admin' })}
+            title="Toggle Admin God Mode Inspector (does not change player ownership)"
+            onClick={() =>
+              setViewer((v) =>
+                v.role === 'admin' ? { role: 'player', playerId: HUMAN_PLAYER_ID } : { role: 'admin' }
+              )
+            }
           >
-            Admin
+            {viewer.role === 'admin' ? 'Exit Admin' : 'Admin Inspector'}
           </button>
+
           {tab === 'play' && (
             <button
               className={`btn btn-sm ${inspectorOpen ? 'btn-active' : ''}`}
@@ -625,14 +725,16 @@ export function App() {
           <GameTable
             view={view}
             viewer={viewer}
+            controlMode={controlMode}
+            humanPlayerId={HUMAN_PLAYER_ID}
+            isBotActing={isBotActing}
+            lastBotSummary={lastBotSummary}
             activePlayer={activePlayer}
             canActAsActivePlayer={canActAsActivePlayer}
             canActAsReader={canActAsReader}
             isViewingHistory={isViewingHistory}
             currentStepIndex={currentStepIndex}
             maxStepIndex={maxStepIndex}
-            autoPlayMode={autoPlayMode}
-            readerBotPolicy={readerBotPolicy}
             liveReconciliation={liveReconciliation}
             selectedSacrificeIds={selectedSacrificeIds}
             elementalSelection={elementalSelection}
@@ -640,12 +742,9 @@ export function App() {
             veilTrayOpen={veilTrayOpen}
             onToggleVeilTray={() => setVeilTrayOpen((open) => !open)}
             onReturnToLive={() => {
-              setAutoPlayMode('off');
+              setReplayPlaying(false);
               setTimelineStep(null);
             }}
-            onToggleAutoWatch={toggleAutoWatch}
-            onStepBot={stepOneBotMove}
-            onTriggerBotReading={triggerBotReading}
             onSwitchViewer={setViewer}
             onToggleSacrifice={toggleSacrifice}
             onClearSacrifices={() => setSelectedSacrificeIds([])}
@@ -663,7 +762,7 @@ export function App() {
             onWatchFullReplay={() => {
               setInspectorOpen(true);
               setTimelineStep(0);
-              setAutoPlayMode('replay');
+              setReplayPlaying(true);
             }}
           />
 
@@ -676,12 +775,12 @@ export function App() {
               maxStepIndex={maxStepIndex}
               isViewingHistory={isViewingHistory}
               timelineStep={timelineStep}
-              readerBotPolicy={readerBotPolicy}
+              readerBotPolicy={botPolicy}
               autoPlayMs={autoPlayMs}
               fileInputRef={fileInputRef}
               onSetTimelineStep={setTimelineStep}
-              onStopAutoPlay={() => setAutoPlayMode('off')}
-              onSetReaderBotPolicy={setReaderBotPolicy}
+              onStopAutoPlay={() => setReplayPlaying(false)}
+              onSetReaderBotPolicy={setBotPolicy}
               onSetAutoPlayMs={setAutoPlayMs}
               onCopyText={(text, label) => void copyText(text, label)}
               onExportTxt={handleExportTxt}

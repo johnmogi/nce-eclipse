@@ -1207,3 +1207,173 @@ select {
   background: var(--surface-2);
   font-size: 12px;
 }
+
+/* ========================================================================= */
+/* MILESTONE D1.2 — HUMAN VS BOT IDENTITIES & TURN PROGRESS STEPPER          */
+/* ========================================================================= */
+
+.bot-activity-chip {
+  font-size: 11.5px;
+  color: var(--muted);
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  max-width: 340px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.identity-strip {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+@media (max-width: 780px) {
+  .identity-strip {
+    grid-template-columns: 1fr;
+  }
+}
+
+.identity-card {
+  border: 1.5px solid var(--border);
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.identity-card.identity-active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 42%, transparent);
+}
+
+.identity-top-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.identity-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  letter-spacing: 0.04em;
+}
+
+.identity-lineage-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.identity-ace-box,
+.identity-lineage-box {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 5px 9px;
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.identity-ace-box.color-black,
+.identity-lineage-box.color-black {
+  background: var(--black-card);
+  border-color: var(--black-border);
+}
+
+.identity-ace-box.color-red,
+.identity-lineage-box.color-red {
+  background: var(--red-card);
+  border-color: var(--red-border);
+}
+
+.identity-ace-glyph {
+  font-size: 16px;
+  font-weight: 800;
+  line-height: 1.1;
+}
+
+.identity-lineage-top {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 14px;
+}
+
+.identity-ace-meta {
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
+.identity-arrow {
+  color: var(--muted);
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.identity-meta-col {
+  margin-left: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+/* Persistent 4-step turn progress indicator */
+.turn-stepper {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 7px 11px;
+  border-radius: 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+
+.turn-stepper-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.turn-step-pill {
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  background: var(--surface);
+}
+
+.turn-step-pill.step-current {
+  border-color: var(--accent);
+  color: var(--accent-ink);
+  background: var(--accent);
+}
+
+.turn-step-pill.step-done {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  color: var(--accent);
+}
+
+.turn-step-arrow {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.hand-area-elemental {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--accent) 32%, transparent);
+}

@@ -448,6 +448,7 @@ export interface ProjectedPlayerView {
     readonly rank: number;
     readonly element: Element;
     readonly color: Color;
+    readonly primaryAceCard: Card;
     readonly topCard: Card;
     readonly stackDepth: number;
     readonly cardIds: readonly string[];

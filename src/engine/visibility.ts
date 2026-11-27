@@ -260,6 +260,8 @@ export function projectView(state: GameState, viewer: Viewer): ProjectedGameView
 
   const players: ProjectedPlayerView[] = state.players.map((p) => {
     const canSeeHand = isAdmin || (viewer.role === 'player' && viewer.playerId === p.id);
+    const primaryAceId = p.lineage.cardIds[0]!;
+    const primaryAceCard = state.cards[primaryAceId]!;
     const topLineageId = p.lineage.cardIds[p.lineage.cardIds.length - 1]!;
     const topCard = state.cards[topLineageId]!;
     const availableCount = getAvailableReaderBonusesForTurn(p, state.turn, state.ruleset).length;
@@ -272,6 +274,7 @@ export function projectView(state: GameState, viewer: Viewer): ProjectedGameView
         rank: p.lineage.rank,
         element: p.lineage.element,
         color: p.lineage.color,
+        primaryAceCard,
         topCard,
         stackDepth: p.lineage.cardIds.length,
         cardIds: [...p.lineage.cardIds]

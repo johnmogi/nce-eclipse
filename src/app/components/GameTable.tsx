@@ -3,12 +3,13 @@ import {
   type BoardTargetSlot,
   type Command,
   type Element,
+  type GamePhase,
   type ProjectedGameView,
   type ProjectedPlayerView,
   type ReconciliationBreakdown,
   type Viewer
 } from '../../engine/index.js';
-import type { AgentPolicyId } from '../../sim/agents.js';
+import type { PlayControlMode } from '../../sim/botController.js';
 import {
   buildElementalCommand,
   moveEarthOrderSlot,
@@ -25,17 +26,51 @@ const ELEMENT_VERB_HINT: Readonly<Record<Element, string>> = {
   earth: 'Reorder — click Deck of Days or an occupied Board card to arrange card order.'
 };
 
+const ELEMENT_SHORT_VERB: Readonly<Record<Element, string>> = {
+  air: '♠ Shuffle',
+  fire: '♣ Burn',
+  water: '♥ Resurface',
+  earth: '♦ Reorder'
+};
+
+function getTurnProgressIndex(phase: GamePhase): number {
+  switch (phase) {
+    case 'AWAITING_ABANDONED_CHOICE':
+    case 'AWAITING_READING':
+    case 'AWAITING_READING_DECISION':
+      return 0; // Reading
+    case 'AWAITING_EVENT_RESOLUTION':
+    case 'AWAITING_CENTER_DECISION':
+    case 'AWAITING_HAND_DISCARD':
+      return 1; // Encounter
+    case 'AWAITING_ELEMENTAL_ACTION':
+      return 2; // Elemental Action
+    case 'READY_TO_END_TURN':
+    case 'GAME_OVER':
+      return 3; // End Turn
+  }
+}
+
+const TURN_STEPS = [
+  { id: 'reading', label: '1. Reading' },
+  { id: 'encounter', label: '2. Encounter' },
+  { id: 'elemental', label: '3. Elemental Action' },
+  { id: 'end', label: '4. End Turn' }
+] as const;
+
 export function GameTable({
   view,
   viewer,
+  controlMode,
+  humanPlayerId,
+  isBotActing,
+  lastBotSummary,
   activePlayer,
   canActAsActivePlayer,
   canActAsReader,
   isViewingHistory,
   currentStepIndex,
   maxStepIndex,
-  autoPlayMode,
-  readerBotPolicy,
   liveReconciliation,
   selectedSacrificeIds,
   elementalSelection,
@@ -43,9 +78,6 @@ export function GameTable({
   veilTrayOpen,
   onToggleVeilTray,
   onReturnToLive,
-  onToggleAutoWatch,
-  onStepBot,
-  onTriggerBotReading,
   onSwitchViewer,
   onToggleSacrifice,
   onClearSacrifices,
@@ -62,14 +94,16 @@ export function GameTable({
 }: {
   view: ProjectedGameView;
   viewer: Viewer;
+  controlMode: PlayControlMode;
+  humanPlayerId: string;
+  isBotActing: boolean;
+  lastBotSummary: string | null;
   activePlayer: ProjectedPlayerView;
   canActAsActivePlayer: boolean;
   canActAsReader: boolean;
   isViewingHistory: boolean;
   currentStepIndex: number;
   maxStepIndex: number;
-  autoPlayMode: 'off' | 'live' | 'replay';
-  readerBotPolicy: AgentPolicyId;
   liveReconciliation: ReconciliationBreakdown | null;
   selectedSacrificeIds: readonly string[];
   elementalSelection: ElementalSelectionState;
@@ -77,9 +111,6 @@ export function GameTable({
   veilTrayOpen: boolean;
   onToggleVeilTray: () => void;
   onReturnToLive: () => void;
-  onToggleAutoWatch: () => void;
-  onStepBot: () => void;
-  onTriggerBotReading: () => void;
   onSwitchViewer: (next: Viewer) => void;
   onToggleSacrifice: (cardId: string) => void;
   onClearSacrifices: () => void;
@@ -94,7 +125,9 @@ export function GameTable({
   onPlayAnotherSeed: () => void;
   onWatchFullReplay: () => void;
 }) {
-  const isElementalWindow = view.phase === 'AWAITING_ELEMENTAL_ACTION' && canActAsActivePlayer;
+  const isHumanVsBot = controlMode === 'human-vs-bot';
+  const isElementalWindow =
+    view.phase === 'AWAITING_ELEMENTAL_ACTION' && canActAsActivePlayer && !isBotActing;
   const activeElement = elementalCtx.activeElement;
   const cmdBuild = buildElementalCommand(view, elementalSelection, elementalCtx);
 
@@ -108,23 +141,26 @@ export function GameTable({
     (b) => b.status === 'available' && b.earnedOnTurn < view.turn && Boolean(b.sourceElement)
   );
 
-  // Determine primary focused player (viewed player in player mode, or active player in Admin mode)
+  // In Human vs Bot, primary hand is always Human (p1) unless Admin inspects active player
   const focusedPlayer =
     viewer.role === 'player'
       ? view.players.find((p) => p.id === viewer.playerId) ?? activePlayer
-      : activePlayer;
-  const otherPlayers = view.players.filter((p) => p.id !== focusedPlayer.id);
+      : isHumanVsBot
+        ? view.players.find((p) => p.id === humanPlayerId) ?? activePlayer
+        : activePlayer;
 
   const canSelectSacrifice =
     view.phase === 'AWAITING_EVENT_RESOLUTION' &&
     liveReconciliation?.reality !== 'treasure' &&
     focusedPlayer.id === view.activePlayerId &&
-    canActAsActivePlayer;
+    canActAsActivePlayer &&
+    !isBotActing;
 
   const needsHandDiscard =
     view.phase === 'AWAITING_HAND_DISCARD' &&
     focusedPlayer.id === view.activePlayerId &&
-    canActAsActivePlayer;
+    canActAsActivePlayer &&
+    !isBotActing;
 
   const canPickElementalHandCard =
     isElementalWindow &&
@@ -136,6 +172,40 @@ export function GameTable({
     Math.max(1, elementalCtx.strength - elementalSelection.boardSlots.length)
   );
 
+  const progressIndex = getTurnProgressIndex(view.phase);
+
+  const getPlayerRoleTitle = (p: ProjectedPlayerView): string => {
+    if (isHumanVsBot) {
+      return p.id === humanPlayerId ? 'PLAYER 1 — YOU' : `${p.name.toUpperCase()} — BOT`;
+    }
+    if (controlMode === 'auto-sim') {
+      return `${p.name.toUpperCase()} — SIM BOT`;
+    }
+    return p.name.toUpperCase();
+  };
+
+  const getPlayerStatusPill = (p: ProjectedPlayerView): { text: string; tone: string } => {
+    if (p.isCurrentReader && view.phase === 'AWAITING_READING') {
+      if (isHumanVsBot && p.id === humanPlayerId) {
+        return { text: 'Your Reading for Bot', tone: 'badge-warn' };
+      }
+      return { text: 'Reader', tone: 'badge-warn' };
+    }
+    if (p.isActive) {
+      if (isHumanVsBot && p.id === humanPlayerId) {
+        return { text: 'Your Turn', tone: 'badge-ok' };
+      }
+      if (isHumanVsBot && p.id !== humanPlayerId) {
+        return { text: isBotActing ? 'Bot Acting…' : "Bot's Turn", tone: 'badge-ok' };
+      }
+      return { text: 'Active Turn', tone: 'badge-ok' };
+    }
+    if (p.isCurrentReader) {
+      return { text: 'Reader', tone: '' };
+    }
+    return { text: 'Waiting', tone: '' };
+  };
+
   return (
     <section className="panel table-panel">
       {/* Compact Table Header */}
@@ -143,32 +213,29 @@ export function GameTable({
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
           <strong className="table-brand">NEXUS ECLIPSE</strong>
           <span className="badge badge-ok">
-            Round {view.round} · Turn {view.turn}
+            {controlMode === 'human-vs-bot'
+              ? 'Human vs Bot'
+              : controlMode === 'hotseat'
+                ? 'Hotseat (2P)'
+                : 'Auto-Sim'}
           </span>
           <span className="badge">
-            Active: {activePlayer.name} ({ELEMENT_META[activePlayer.lineage.element].suitSymbol}{' '}
-            Rank {activePlayer.lineage.rank})
+            Round {view.round} · Turn {view.turn}
           </span>
+          {viewer.role === 'admin' && (
+            <span className="badge badge-warn">Admin God Mode (Inspector)</span>
+          )}
         </div>
 
         <div className="toolbar-group">
-          <button
-            className={`btn btn-sm ${autoPlayMode !== 'off' ? 'btn-danger' : ''}`}
-            onClick={onToggleAutoWatch}
-          >
-            {autoPlayMode !== 'off'
-              ? '⏸ Pause'
-              : view.status === 'completed'
-                ? '▶ Replay'
-                : '▶ Auto-Watch'}
-          </button>
-          <button
-            className="btn btn-sm"
-            disabled={!isViewingHistory && view.status !== 'playing'}
-            onClick={onStepBot}
-          >
-            ⏭ Bot Step
-          </button>
+          {lastBotSummary && isHumanVsBot && (
+            <span className="bot-activity-chip" title={lastBotSummary}>
+              🤖 {lastBotSummary}
+            </span>
+          )}
+          <span className="badge" title="Periodic consensual Trading Market arrives in Milestone D2">
+            Market: D2 Upcoming
+          </span>
         </div>
       </div>
 
@@ -183,8 +250,90 @@ export function GameTable({
       )}
 
       {/* ===================================================================== */}
+      {/* PERMANENT DUAL PLAYER IDENTITY STRIP (PRIMARY ACES + CURRENT LINEAGE) */}
+      {/* Both Primary Aces stay permanently visible even after evolution!       */}
+      {/* ===================================================================== */}
+      <div className="identity-strip">
+        {view.players.map((p) => {
+          const statusPill = getPlayerStatusPill(p);
+          const primaryAce = p.lineage.primaryAceCard;
+          const currentTop = p.lineage.topCard;
+          const hasEvolved = currentTop.id !== primaryAce.id;
+          const isBotPlayer = isHumanVsBot && p.id !== humanPlayerId;
+
+          return (
+            <div
+              key={p.id}
+              className={`identity-card ${p.isActive ? 'identity-active' : ''}`}
+              data-player-id={p.id}
+            >
+              <div className="identity-top-row">
+                <div className="identity-name">
+                  <span aria-hidden="true">{isBotPlayer ? '🤖' : '👤'}</span>
+                  <strong>{getPlayerRoleTitle(p)}</strong>
+                </div>
+                <span className={`badge ${statusPill.tone}`}>{statusPill.text}</span>
+              </div>
+
+              <div className="identity-lineage-row">
+                {/* Permanent Primary Ace */}
+                <div
+                  className={`identity-ace-box ${
+                    primaryAce.color === 'red' ? 'color-red' : 'color-black'
+                  }`}
+                  data-testid={`primary-ace-${p.id}`}
+                >
+                  <div className="identity-ace-glyph">{primaryAce.shortLabel}</div>
+                  <div className="identity-ace-meta">
+                    Primary Ace · {ELEMENT_META[p.primaryElement].label}
+                  </div>
+                </div>
+
+                <div className="identity-arrow" aria-hidden="true">
+                  →
+                </div>
+
+                {/* Evolving Current Lineage */}
+                <div
+                  className={`identity-lineage-box ${
+                    currentTop.color === 'red' ? 'color-red' : 'color-black'
+                  }`}
+                  data-testid={`current-lineage-${p.id}`}
+                >
+                  <div className="identity-lineage-top">
+                    <strong>{currentTop.shortLabel}</strong>
+                    <span className="badge">Rank {p.lineage.rank}</span>
+                    <span className="badge">{currentTop.vp} VP</span>
+                  </div>
+                  <div className="identity-ace-meta">
+                    {hasEvolved
+                      ? `Current Lineage · ${ELEMENT_META[p.lineage.element].label} (${p.evolutionsCompleted} evo)`
+                      : `At Primary Ace (${ELEMENT_META[p.lineage.element].label})`}
+                  </div>
+                </div>
+
+                {/* Public Stats: Hand Count (never reveals Bot hand) + Bonuses */}
+                <div className="identity-meta-col">
+                  <span className="badge">
+                    Hand: {p.handCount}/{view.ruleset.maxHandSize}
+                    {p.hand === null ? ' (Hidden)' : ''}
+                  </span>
+                  {p.availableReaderBonusCount > 0 ? (
+                    <span className="badge badge-warn">
+                      ★ {p.availableReaderBonusCount} Bonus Ready
+                    </span>
+                  ) : p.pendingReaderBonusCount > 0 ? (
+                    <span className="badge">+{p.pendingReaderBonusCount} Bonus Next Turn</span>
+                  ) : null}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* ===================================================================== */}
       {/* PRIMARY 3-ZONE TABLETOP ROW: DECK OF DAYS | SHARED BOARD | THE VEIL   */}
-      {/* All visible together above the fold on desktop — never a footer!      */}
       {/* ===================================================================== */}
       <div className="table-top-trio">
         {/* ZONE 1: DECK OF DAYS */}
@@ -428,9 +577,7 @@ export function GameTable({
         </div>
       </div>
 
-      {/* ===================================================================== */}
-      {/* EXPANDABLE FACE-UP VEIL HISTORY TRAY (AUTO-OPENS FOR WATER)           */}
-      {/* ===================================================================== */}
+      {/* EXPANDABLE FACE-UP VEIL HISTORY TRAY (AUTO-OPENS FOR WATER) */}
       {(veilTrayOpen || activeElement === 'water') && (
         <div className={`veil-tray ${activeElement === 'water' ? 'veil-tray-water' : ''}`}>
           <div className="veil-tray-header">
@@ -482,6 +629,49 @@ export function GameTable({
       )}
 
       {/* ===================================================================== */}
+      {/* PERSISTENT 4-STEP TURN PROGRESS INDICATOR                             */}
+      {/* Reading -> Encounter -> Elemental Action -> End Turn                  */}
+      {/* ===================================================================== */}
+      <div className="turn-stepper" aria-label="Turn progress">
+        {TURN_STEPS.map((step, idx) => {
+          const isCurrent = idx === progressIndex && view.status === 'playing';
+          const isDone = idx < progressIndex || view.status === 'completed';
+          return (
+            <div key={step.id} className="turn-stepper-item">
+              <span
+                className={`turn-step-pill ${
+                  isCurrent ? 'step-current' : isDone ? 'step-done' : ''
+                }`}
+              >
+                {isDone ? '✓ ' : ''}
+                {step.label}
+              </span>
+              {idx < TURN_STEPS.length - 1 && (
+                <span className="turn-step-arrow" aria-hidden="true">
+                  →
+                </span>
+              )}
+            </div>
+          );
+        })}
+
+        {view.ruleset.features.elementalEffects && view.status === 'playing' && (
+          <span
+            className={`badge ${
+              view.phase === 'AWAITING_ELEMENTAL_ACTION' && !activePlayer.effectUsedThisTurn
+                ? 'badge-ok'
+                : ''
+            }`}
+            style={{ marginLeft: 'auto' }}
+          >
+            {activePlayer.effectUsedThisTurn
+              ? 'Elemental action used (0 left)'
+              : '1 elemental action available'}
+          </span>
+        )}
+      </div>
+
+      {/* ===================================================================== */}
       {/* CONTEXTUAL ACTION BAND (ZERO DROPDOWNS!)                              */}
       {/* ===================================================================== */}
       <div className="action-stage">
@@ -498,6 +688,18 @@ export function GameTable({
                 ▶ Watch Full Replay
               </button>
             </div>
+          </div>
+        ) : isBotActing ? (
+          <div className="action-row">
+            <div>
+              <h2 className="decision-title">
+                🤖 {activePlayer.name} (Bot) is taking its turn…
+              </h2>
+              <div className="brand-sub">
+                {lastBotSummary ?? 'Bot evaluates only public & role-authorized information.'}
+              </div>
+            </div>
+            <span className="badge badge-ok">Autonomous Bot Turn</span>
           </div>
         ) : view.phase === 'AWAITING_ABANDONED_CHOICE' ? (
           <div className="action-row">
@@ -536,13 +738,15 @@ export function GameTable({
             <div>
               <h2 className="decision-title">
                 {canActAsReader
-                  ? `Reader (${view.currentReading.readerName}): Inspect Center & Advise ${activePlayer.name}`
+                  ? isHumanVsBot && view.currentReading.readerId === humanPlayerId
+                    ? `You are the Reader for ${activePlayer.name} (Bot) — Advise GOOD or BAD`
+                    : `Reader (${view.currentReading.readerName}): Inspect Center & Advise ${activePlayer.name}`
                   : `Waiting for ${view.currentReading.readerName}'s Reading`}
               </h2>
               <div className="brand-sub">
                 {canActAsReader
-                  ? 'Center is visible only to you. Advise GOOD or BAD (honest or bluff).'
-                  : `Center is face-down. Receive ${view.currentReading.readerName}'s reading before choosing Pursue or Discard.`}
+                  ? 'You see Center privately on the Shared Board above. Tell the truth or bluff — then Bot plays its own turn automatically.'
+                  : 'Center is concealed until the Reader delivers GOOD or BAD advice.'}
               </div>
             </div>
             <div className="toolbar-group">
@@ -573,45 +777,36 @@ export function GameTable({
                     Advise: BAD
                   </button>
                 </>
-              ) : (
-                <>
-                  <button
-                    className="btn btn-primary"
-                    disabled={isViewingHistory}
-                    onClick={onTriggerBotReading}
-                  >
-                    Receive Bot Reading ({readerBotPolicy === 'bluffing-rival' ? 'Rival AI' : 'Honest AI'})
-                  </button>
-                  <button
-                    className="btn"
-                    onClick={() =>
-                      onSwitchViewer({ role: 'player', playerId: view.currentReading!.readerId })
-                    }
-                  >
-                    Switch to {view.currentReading.readerName} (Hotseat)
-                  </button>
-                </>
-              )}
+              ) : controlMode === 'hotseat' ? (
+                <button
+                  className="btn btn-primary"
+                  onClick={() =>
+                    onSwitchViewer({ role: 'player', playerId: view.currentReading!.readerId })
+                  }
+                >
+                  Switch to {view.currentReading.readerName} (Hotseat)
+                </button>
+              ) : null}
             </div>
           </div>
         ) : view.phase === 'AWAITING_READING_DECISION' && view.currentReading?.advice ? (
           <div className="action-row">
             <div>
               <h2 className="decision-title">
-                {view.currentReading.readerName} advises{' '}
+                {isHumanVsBot && view.currentReading.readerId !== humanPlayerId
+                  ? 'Bot advises: '
+                  : `${view.currentReading.readerName} advises: `}
                 <span
                   className={
                     view.currentReading.advice === 'good' ? 'badge badge-ok' : 'badge badge-danger'
                   }
                 >
                   {view.currentReading.advice.toUpperCase()}
-                </span>{' '}
-                — {activePlayer.name}, Pursue or Discard?
+                </span>
               </h2>
               <div className="brand-sub">
-                {view.ruleset.features.barriersAndTrials
-                  ? 'Pursuing reveals Center and the Left Event (Treasure, Barrier, or Trial). Discarding sends Center straight to the Veil.'
-                  : 'Pursuing reveals and claims Center. Discarding sends it to the Veil.'}
+                The Center card remains concealed. You decide whether to pursue it (revealing Center
+                &amp; Left Event) or discard it straight to the Veil.
               </div>
             </div>
             <div className="toolbar-group">
@@ -634,14 +829,14 @@ export function GameTable({
                     Discard to Veil
                   </button>
                 </>
-              ) : (
+              ) : controlMode === 'hotseat' ? (
                 <button
                   className="btn btn-primary"
                   onClick={() => onSwitchViewer({ role: 'player', playerId: view.activePlayerId })}
                 >
                   Hand Back to {activePlayer.name}
                 </button>
-              )}
+              ) : null}
             </div>
           </div>
         ) : view.phase === 'AWAITING_EVENT_RESOLUTION' && liveReconciliation ? (
@@ -733,12 +928,12 @@ export function GameTable({
                 <h2 className="decision-title">
                   {activeElement
                     ? `${ELEMENT_META[activeElement].suitSymbol} ${ELEMENT_META[activeElement].label} (${elementalCtx.strength} VP)`
-                    : 'Your elemental action'}
+                    : 'Your elemental action (Optional · 1 remaining)'}
                 </h2>
                 <div className="brand-sub">
                   {activeElement
                     ? ELEMENT_VERB_HINT[activeElement]
-                    : 'Select a card from your hand, then interact directly with the highlighted Deck, Board, or Veil.'}
+                    : 'Click any highlighted card in your hand below (consumes card → Veil), then click the highlighted Deck, Board, or Veil zone to confirm.'}
                 </div>
               </div>
 
@@ -769,7 +964,6 @@ export function GameTable({
               </div>
             </div>
 
-            {/* Available Reader Bonuses (Separate from physical hand-card activations) */}
             {availableBonuses.length > 0 && canActAsActivePlayer && (
               <div className="bonus-pill-row">
                 <span className="badge badge-warn">Provisional Reader Bonus (0 hand cost):</span>
@@ -791,13 +985,14 @@ export function GameTable({
               </div>
             )}
 
-            {/* Direct Stepper Pills for Air/Fire on Days (NO DROPDOWN!) */}
             {(activeElement === 'air' || activeElement === 'fire') &&
               elementalSelection.daysSelected &&
               maxDaysPick > 1 && (
                 <div className="direct-controls-strip">
                   <span className="brand-sub">
-                    {activeElement === 'air' ? 'Cards from Days to shuffle:' : 'Cards from Days to burn:'}
+                    {activeElement === 'air'
+                      ? 'Cards from Days to shuffle:'
+                      : 'Cards from Days to burn:'}
                   </span>
                   {Array.from({ length: maxDaysPick }, (_, i) => i + 1).map((n) => (
                     <button
@@ -811,7 +1006,6 @@ export function GameTable({
                 </div>
               )}
 
-            {/* Visual Card-Reordering Interface for Earth (NO DROPDOWN!) */}
             {activeElement === 'earth' &&
               (elementalSelection.daysSelected || elementalSelection.boardSlots.length > 0) && (
                 <div className="earth-reorder-box">
@@ -829,8 +1023,7 @@ export function GameTable({
                                 const len = Math.min(elementalCtx.strength, view.daysCount);
                                 onUpdateElementalSelection({
                                   earthMode: 'days_reorder',
-                                  earthIndexOrder:
-                                    len === 3 ? [1, 2, 0] : [1, 0]
+                                  earthIndexOrder: len === 3 ? [1, 2, 0] : [1, 0]
                                 });
                               }}
                             >
@@ -997,7 +1190,7 @@ export function GameTable({
           <div className="action-row">
             <div>
               <h2 className="decision-title">{activePlayer.name}: Turn Complete</h2>
-              <div className="brand-sub">Finish turn to pass play and refresh the board.</div>
+              <div className="brand-sub">Finish turn to pass play to the next player.</div>
             </div>
             <button
               className="btn btn-primary"
@@ -1011,22 +1204,18 @@ export function GameTable({
       </div>
 
       {/* ===================================================================== */}
-      {/* YOUR HAND & LINEAGE AREA (PRIMARY PLAYER FOCUS)                       */}
+      {/* YOUR HAND AREA (PLAYABLE CARDS HIGHLIGHTED DURING ELEMENTAL WINDOW)   */}
       {/* ===================================================================== */}
-      <div className="hand-area">
+      <div className={`hand-area ${canPickElementalHandCard ? 'hand-area-elemental' : ''}`}>
         <div className="hand-area-header">
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
             <strong>
-              {focusedPlayer.name}&apos;s hand ({focusedPlayer.handCount}/{view.ruleset.maxHandSize})
+              {isHumanVsBot && focusedPlayer.id === humanPlayerId
+                ? `Your hand (${focusedPlayer.handCount}/${view.ruleset.maxHandSize})`
+                : `${focusedPlayer.name}'s hand (${focusedPlayer.handCount}/${view.ruleset.maxHandSize})`}
             </strong>
-            <span className="badge badge-ok">
-              Lineage: {focusedPlayer.lineage.topCard.shortLabel} · Rank {focusedPlayer.lineage.rank}{' '}
-              ({focusedPlayer.lineage.topCard.vp} VP · {focusedPlayer.evolutionsCompleted} evo)
-            </span>
-            {focusedPlayer.availableReaderBonusCount > 0 && (
-              <span className="badge badge-warn">
-                ★ {focusedPlayer.availableReaderBonusCount} Reader Bonus Ready
-              </span>
+            {canPickElementalHandCard && (
+              <span className="badge badge-ok">Playable for Elemental Action</span>
             )}
           </div>
           <span className="brand-sub">
@@ -1035,10 +1224,8 @@ export function GameTable({
               : needsHandDiscard
                 ? 'Click card to discard to Veil'
                 : canPickElementalHandCard
-                  ? 'Click a card to activate its element (Card → Veil)'
-                  : focusedPlayer.effectUsedThisTurn
-                    ? 'Elemental action used this turn'
-                    : ''}
+                  ? 'Click any card to activate its element (consumes card → Veil)'
+                  : ''}
           </span>
         </div>
 
@@ -1059,6 +1246,11 @@ export function GameTable({
                   key={card.id}
                   card={card}
                   large
+                  subtitle={
+                    canPickElementalHandCard && card.element
+                      ? ELEMENT_SHORT_VERB[card.element]
+                      : undefined
+                  }
                   selected={isSelectedForSac || isSelectedForEl}
                   onClick={
                     canSelectSacrifice
@@ -1079,27 +1271,6 @@ export function GameTable({
             })}
           </div>
         )}
-      </div>
-
-      {/* Compact Opponent Status Strip */}
-      <div className="opponents-strip">
-        {otherPlayers.map((opp) => (
-          <div key={opp.id} className="opponent-pill">
-            <strong>
-              {opp.name} {opp.isActive ? '● Active' : opp.isCurrentReader ? '◉ Reader' : ''}
-            </strong>
-            <span className="badge">
-              Lineage {opp.lineage.topCard.shortLabel} (Rank {opp.lineage.rank} ·{' '}
-              {opp.lineage.topCard.vp} VP)
-            </span>
-            <span className="badge">
-              Hand: {opp.hand ? opp.hand.map((c) => c.shortLabel).join(' ') || 'Empty' : `${opp.handCount} hidden`}
-            </span>
-            {opp.pendingReaderBonusCount > 0 && (
-              <span className="badge badge-warn">+{opp.pendingReaderBonusCount} Bonus</span>
-            )}
-          </div>
-        ))}
       </div>
     </section>
   );

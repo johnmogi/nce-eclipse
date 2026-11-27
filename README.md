@@ -8,13 +8,14 @@ Local-first deterministic TypeScript rules engine, headless CLI simulation lab, 
   - `types.ts`, `cards.ts`, `rng.ts`, `hash.ts`, `invariants.ts`, `rulesets.ts`
   - `setup.ts`, `evolution.ts`, `readings.ts`, `reconciliation.ts`, `elemental-effects.ts`, `event-helpers.ts`, `reducer.ts`
   - `visibility.ts`, `formatters.ts` — strict player-safe projections (deterministic `seed`, concealed Center/Event cards, opponent hands, and Days order masked from unauthorized players)
-- **`src/sim/`** — Headless deterministic batch simulator (`agents.ts`, `runner.ts`, `formatters.ts`, `cli.ts`)
-- **`src/app/`** — Local Vite + React Dev Console with unified 3-zone tabletop layout (`components/GameTable.tsx`, `components/CardBack.tsx`, `elementalTargeting.ts`, `components/InspectorDrawer.tsx`, `components/DeckView.tsx`, `components/RulesView.tsx`, `components/SimulationLabView.tsx`) and IndexedDB persistence
-- **`tests/`** — Deterministic unit, invariant, privacy, scenario, UI targeting, and batch regression suites:
+- **`src/sim/`** — Headless deterministic batch simulator (`agents.ts`, `runner.ts`, `formatters.ts`, `cli.ts`) and role-masked fair Bot controller (`botController.ts`)
+- **`src/app/`** — Local Vite + React Dev Console defaulting to **Human (Player 1) vs Autonomous Bot (Player 2)** with permanent Primary Ace + evolving Lineage cards, persistent 4-step turn progress (`Reading → Encounter → Elemental Action → End Turn`), unified 3-zone tabletop layout (`components/GameTable.tsx`, `components/CardBack.tsx`, `elementalTargeting.ts`, `components/InspectorDrawer.tsx`, `components/DeckView.tsx`, `components/RulesView.tsx`, `components/SimulationLabView.tsx`), and IndexedDB persistence
+- **`tests/`** — Deterministic unit, invariant, privacy, scenario, UI targeting, Human-vs-Bot fairness, and batch regression suites:
   - `tests/engine.test.ts` (Milestones A + B + L1.2)
   - `tests/milestone-c-scenarios.test.ts` (Executive Blueprint v0.2 scenarios `S1–S6` preserved baseline)
   - `tests/milestone-d1.test.ts` (D0 privacy/rotation fixes, D1 Elemental Activation Cost, Water self-resurface regression, Reader Bonus spending/expiry, and 500-run D1 gate)
   - `tests/elemental-ui-targeting.test.ts` (D1.1 direct card-to-zone targeting & Water resurface acceptance walkthrough)
+  - `tests/human-vs-bot.test.ts` (D1.2 autonomous Bot opening reading, permanent Primary Aces, fair role-masked AI, and multi-round replay)
 
 ## Implemented Rules Scope (Milestones A–D1)
 
