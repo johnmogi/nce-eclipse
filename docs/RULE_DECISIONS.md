@@ -1,0 +1,123 @@
+# NEXUS ECLIPSE — CREATOR RULE DECISIONS REGISTER
+
+**Status:** Open for Creator Approval (Gate to Exit R0 → Begin R1)  
+**Policy:** No `OPEN` or `PROVISIONAL` mechanic may be silently hardened into canon. Every decision below blocks a specific recovery stage (`R1`, `R2`, `R3`, or `R5`). Reply with your chosen option per ID (e.g., `RD-01: B`, `RD-02: A`, etc.) to unlock implementation.
+
+---
+
+## Gate R1 Decisions — First-Turn Reliability & Core Loop
+
+### `RD-01` — Starting Hand vs. Setup Mandatory Evolution `[CRITICAL · BLOCKS R1]`
+- **Problem:** Dealing 3 Minor cards and immediately running mandatory chained evolution can consume all 3 cards before Turn 1 (`eclipse-me-001` leaves Player 1 with `0/5` cards and Rank 6 while Bot holds `3/5` at Rank 1).
+- **Options:**
+  - **Option A — Refill after setup evolution (with cap):** Deal 3 Minors → run setup mandatory evolution → draw replacement Minors until hand reaches 3 (repeat evolution? Cap setup evolutions at max 1 or 2 steps, OR draw replacement cards that do *not* evolve until Turn 1).
+  - **Option B — Clean 3-card non-evolving opening hand *(Recommended)*:** Deal 3 Minors to each player; **if any dealt card would immediately evolve the starting Ace, return it to the Deck of Days and draw another Minor** (re-shuffling returned cards back into Days). Result: **both players guaranteed to start Turn 1 at Rank 1 Ace with exactly 3 playable hand cards**, zero unfair Turn-0 Rank-6 spikes, zero empty hands, 100% card conservation.
+  - **Option C — Keep current setup evolution:** Allow Turn-0 auto-evolution to empty hands; rely on UI notice only. *(Not recommended — breaks the 3-playable-cards opening experience.)*
+- **Creator Decision:** `PENDING`
+
+### `RD-02` — Maximum Hand Size (`maxHandSize`) `[MEDIUM · BLOCKS R1]`
+- **Problem:** Presets currently use `startingHandSize = 3`, `maxHandSize = 5`. Recent playtest feedback requested checking whether the default hand limit should be `3` instead of `5`.
+- **Options:**
+  - **Option A — `startingHandSize = 3`, `maxHandSize = 5` *(Recommended)*:** Gives room to hold cards claimed from readings for Barrier/Trial sacrifices, elemental actions, and trading without constantly discarding.
+  - **Option B — `startingHandSize = 3`, `maxHandSize = 3`:** Tighter hand pressure; claiming any card that doesn't evolve forces immediate discard back to 3.
+- **Creator Decision:** `PENDING`
+
+### `RD-03` — Elemental Action Window Timing `[MEDIUM · BLOCKS R1]`
+- **Problem:** Milestone D1 placed the optional Elemental Action *after* the encounter; Milestone E moved it *before* Reading (`before_reading`) per creator feedback so players can manipulate the Board/Days before committing to a Reading.
+- **Options:**
+  - **Option A — `before_reading` as Classic Prototype default *(Recommended)*:** Start of turn = optional Elemental Prep (1 hand card or Reader Bonus) → Reading → Encounter → End Turn.
+  - **Option B — `after_encounter`:** Reading → Encounter → Elemental Action → End Turn.
+  - **Option C — Flexible (either before OR after, still max 1 per turn):** Allows acting before Reading *or* after Encounter, never both. *(Adds one extra click on turns where you don't use an element.)*
+- **Creator Decision:** `PENDING`
+
+### `RD-04` — What Happens After Following `BAD` Advice (`DiscardCenter`) `[HIGH · BLOCKS R1]`
+- **Problem:** Executive Blueprint v0.2 §4.4 states `DiscardCenter` moves Center to Veil and ends the encounter for that turn (no replacement card). However, a playtest comment asked whether discarding after `BAD` advice should deal a new card for the player to resolve.
+- **Options:**
+  - **Option A — No replacement draw (Executive Blueprint v0.2 canon) *(Recommended)*:** Following `BAD` advice discards the concealed card to the Veil, grants the Reader their bonus, and finishes the encounter. This keeps `BAD` advice strategically weighty (risking a bluff costs you your turn's acquisition).
+  - **Option B — Draw 1 blind replacement card:** Discarding sends Center to Veil, immediately flips a replacement Center from Days, and resolves Left Event against it (cannot discard twice). *(Weakens bluff risk significantly and burns Days faster.)*
+- **Creator Decision:** `PENDING`
+
+### `RD-05` — Reader Bonus Exact Mechanics `[HIGH · BLOCKS R1]`
+- **Problem:** Currently provisional (`free_tier1_elemental_next_turn`): earned on `GOOD + Claim` or `BAD + Discard` (withheld on `GOOD + Abandon`), element = resolved Center card's element, Tier 1 (1 VP), 0 hand cost, consumes the Reader's 1-elemental-action slot next turn, expires at end of that turn.
+- **Sub-decisions to lock:**
+  1. **GOOD → PURSUE → ABANDON:** Withhold bonus (`false`, *recommended*) vs. Grant on Pursue (`true`).
+  2. **Action Budget:** Does spending a Reader Bonus consume your 1 normal elemental action that turn (`true`), or is it a **bonus extra action** (`false`, *recommended if you want Reader rewards to feel exciting even when holding strong hand cards*)?
+  3. **Expiry:** Expires if unused on your next turn (*recommended*) vs. persists until spent (max 1 banked).
+- **Creator Decision:** `PENDING`
+
+### `RD-09` — Earth Reordering Visibility on Deck of Days `[HIGH · BLOCKS R1]`
+- **Problem:** Currently, players activating Earth on Deck of Days see only masked card backs (`Orig #1, #2, #3`), making Earth reordering blind guesswork indistinguishable from Air's shuffle.
+- **Options:**
+  - **Option A — Private temporary peek on Earth activation *(Recommended)*:** Activating an Earth card (`strength = 1..3`) or Earth Reader Bonus commits the activation (consuming the card → Veil), privately reveals the top `strength` cards of Deck of Days **only to the active player** (`AWAITING_EARTH_REORDER` sub-phase), lets them arrange exact order (or place top card on bottom at 1 VP), and confirms. Fully auditable, zero leakage to opponent, preserves `Earth = deliberate order` vs `Air = blind shuffle`.
+  - **Option B — Earth targets Board only unless Reflection/top-reveal is active:** Prohibits blind Days reordering; narrows Earth's utility when Board has few cards.
+- **Creator Decision:** `PENDING`
+
+---
+
+## Gate R2 Decisions — Classic Courts, Eclipse & Intentional Triangulation
+
+### `RD-06` — Classic Court Arrival, Dormancy, Active Buff & Contention Lifecycle `[CRITICAL · BLOCKS R2]`
+- **Problem:** Current `majors.ts` overflows drawn Courts automatically across `Parallel → Event → Center`, causing 88% automatic Triangulation wins in ~8 turns, while dormancy has no mechanical effect and Courts grant no active board buff.
+- **Options:**
+  - **Option A — Dedicated Parallel Slot + 1-Turn Dormancy + LIFO Contention (`Rank 7+` chooses) *(Recommended)*:**
+    - Newly drawn Courts ALWAYS route to **Parallel Dimension** (never auto-overflowing into Event or Center!).
+    - A newly arrived Court is **dormant for 1 full turn** (no active buff while dormant).
+    - While active, a Court grants its Classic bonus (`J +1 / Q +2 / K +3` to matching-element reconciliation/effects, subject to `maxEffectiveVP` cap).
+    - **Contention:** When a new Court arrives while Parallel already holds a Court:
+      - First check if the arriving Court + existing Board Court form a **Classic Eclipse** (opposite-color same rank, e.g. `K♠ + K♥`) → if so, **Eclipse triggers immediately!** (Active player claims persistent `+1/+2/+3` Eclipse credit, both Courts move to Veil.)
+      - Otherwise, **Major Contention** resolves: if active player is **Rank 1–6**, **LIFO** applies (existing Parallel Court exits to Veil, newcomer takes Parallel dormant 1 turn); if active player is **Rank 7–9**, engine pauses in `AWAITING_MAJOR_CONTENTION` (`ChooseMajorExit`) so player chooses which Court stays and which exits to Veil!
+    - Optional: Should `Parallel` hold **up to 2 Courts** (1 Active + 1 Dormant) before LIFO contention triggers so Eclipses can form naturally between two consecutive drawn Courts? **Yes — strongly recommended** (without 2 slots or paired check on arrival, opposite-color same-rank pairs would never coexist long enough to Eclipse!).
+  - **Option B — Separate Active Altar (up to 2) + Dormant Parallel Queue:** Similar to Option A, visually separating dormant arriving Court from active Board Court(s).
+- **Creator Decision:** `PENDING`
+
+### `RD-07` — How Triangulation (3 Majors on Event + Center + Parallel) Becomes Possible in Classic Mode `[CRITICAL · BLOCKS R2]`
+- **Problem:** Once Option A above stops automatic overflow into Event and Center, **how** can three Courts legally occupy `Event`, `Center`, and `Parallel` simultaneously to achieve Triangulation? (GDD §16 calls this *"the single most important spatial-rules gap"*.)
+- **Options:**
+  - **Option A — Intentional Placement via Elemental Action / High-Rank Control *(Recommended for Classic)*:**
+    - Natural draws only place Courts into `Parallel` (never auto-filling Event/Center).
+    - A player engineers Triangulation deliberately by:
+      1. Keeping an active Court in `Parallel` (or two via contention timing), AND
+      2. Using **Water (tier 3 / 3 VP)** to resurface a Court from the Veil onto an open Board slot (`Event` or `Center`), OR **Earth (tier 2–3)** to reposition a Court onto Event/Center, OR **Rank 7–9 Contention** allowing a contending Court to be *pinned* onto Event/Center instead of discarded!
+    - Result: Triangulation becomes a deliberate, dramatic late-game win (~5–15% of games) instead of an 88% turn-8 accident.
+  - **Option B — Keep Courts in Parallel/Eclipse only for Classic; defer Triangulation to R5 (`Death/Rebirth` + `Merkabah`):** Classic mode wins via Eclipse (`players + 1`) or Days exhaustion; Triangulation unlocks with bespoke Sun/Moon Majors in R5.
+- **Creator Decision:** `PENDING`
+
+### `RD-08` — Classic Court Active Buff Interaction with `maxEffectiveVP = 3` `[MEDIUM · BLOCKS R2]`
+- **Problem:** If a King (`+3`) is active on Board and `maxEffectiveVP = 3`, a player at Rank 1 (`1 VP`) + King (`+3`) hits the cap immediately; a player at Rank 7 (`3 VP`) gains `+0` net VP from the King unless Eclipse/Court bonuses either bypass or raise the cap slightly.
+- **Options:**
+  - **Option A — Strict `maxEffectiveVP = 3` cap on everything:** Keeps introductory math flat (`1–3`); Courts mainly help low-rank players pass Barriers/Trials without sacrificing cards.
+  - **Option B — Separate `maxBaseVP = 3` from persistent Eclipse bonus (`+1/+2/+3`):** Minor cards & lineage stay capped at 3, while earned Eclipses give tangible progression advantage.
+- **Creator Decision:** `PENDING`
+
+---
+
+## Gate R3 Decisions — Trading Market & Endings
+
+### `RD-10` — Trading Market Cadence & Bot Negotiation Policy `[HIGH · BLOCKS R3]`
+- **Options:**
+  - **Cadence:** Open after **every 2nd round** (`marketFrequencyRounds = 2`, *recommended* per GDD §15 hypothesis #4) vs. after **every round** (`1`).
+  - **Offer types:** Allow 1-for-1, multi-card uneven trades, and 1-way gifts (`[AGREED]`).
+  - **Bot negotiation policy:** Fair masked-view evaluator that accepts trades improving its evolution proximity or VP balance (never peeking at hidden Days or Human's unoffered cards).
+  - **Max offers per market window:** Cap at `2` proposals per player per market window so markets stay brisk (`[PROVISIONAL]`).
+- **Creator Decision:** `PENDING`
+
+### `RD-11` — "Winner of the Day" Tie-Break on Deck Exhaustion `[MEDIUM · BLOCKS R3/R4]`
+- **Options:**
+  - **Option A — Eclipse Count → Lineage Rank → Evolutions Completed → Shared *(Recommended)*:** Rewards pursuing the primary Eclipse objective first, then personal growth.
+  - **Option B — Lineage Rank → Eclipse Count → Shared:** Pure personal evolution honor per GDD §9.3 (*"strongest evolved player"*).
+- **Creator Decision:** `PENDING`
+
+### `RD-12` — Trial Formula Confirmation `[LOW · ALREADY IMPLEMENTED PROVISIONALLY]`
+- Currently: compares against **Left Event element** (`Water > Fire > Earth > Air > Water`), requires at least 1 advantageous card (lineage or sacrifice), grants `+1 VP` once, must strictly exceed Event VP (`> 1`), capped at `maxEffectiveVP = 3`.
+- **Decision needed:** Confirm as **`[AGREED]`** for Classic mode, or request adjustment.
+- **Creator Decision:** `PENDING`
+
+---
+
+## Gate R5 Decisions — Future Sun/Moon Major Arcana (Deferred Until After R4)
+
+### `RD-13` — Sun/Moon Eclipse Pairing Rule `[OPEN · DEFERRED TO R5]`
+- What exact pairs among the 18 numbered Sun/Moon Majors form a Sun/Moon Eclipse (e.g., matching number Sun `N` + Moon `N`, or specific thematic pairs)? Do repeated Eclipses stack Champion bonuses or only increment `eclipseCount`?
+
+### `RD-14` — Moon (0) Entropy Duration & Sun (0) Rescue Condition `[OPEN · DEFERRED TO R5]`
+- Exact number of turns/actions during Moon Entropy, legal actions (trading/elemental), exact rescue condition (Eclipse or Triangulation), and Board/Hand disposition on Sun Renewal.
