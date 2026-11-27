@@ -1377,3 +1377,119 @@ select {
   border-color: var(--accent);
   box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--accent) 32%, transparent);
 }
+
+/* ========================================================================= */
+/* MILESTONE D1.3 — ORDERED DECK OF DAYS & VEIL BROWSERS                     */
+/* ========================================================================= */
+
+.browser-drawer {
+  border: 1.5px solid var(--border);
+  border-radius: 12px;
+  padding: 12px 14px;
+  background: var(--surface-2);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.browser-drawer-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.browser-scroll-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(126px, 1fr));
+  gap: 8px;
+  max-height: 290px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.browser-item-card {
+  border: 1.5px solid var(--border);
+  border-radius: 10px;
+  padding: 8px;
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  transition: border-color 0.15s, transform 0.15s;
+}
+
+.browser-item-card.color-black {
+  background: var(--black-card);
+  border-color: var(--black-border);
+}
+
+.browser-item-card.color-red {
+  background: var(--red-card);
+  border-color: var(--red-border);
+}
+
+.browser-item-card.clickable {
+  cursor: pointer;
+}
+
+.browser-item-card.clickable:hover {
+  border-color: var(--accent);
+  transform: translateY(-1px);
+}
+
+.browser-item-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+}
+
+.browser-item-hidden {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  text-align: center;
+}
+
+.browser-item-face {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.browser-face-glyph {
+  font-size: 20px;
+  font-weight: 800;
+  line-height: 1.1;
+}
+
+.browser-face-label {
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.browser-history-list {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px dashed var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.browser-history-entry {
+  font-size: 10px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.zone-browse-btn {
+  margin-top: 2px;
+  font-size: 11px;
+  padding: 3px 8px;
+}

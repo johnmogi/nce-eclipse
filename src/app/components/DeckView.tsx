@@ -4,9 +4,15 @@ export function DeckView({ view, viewer }: { view: ProjectedGameView; viewer: Vi
   return (
     <section className="panel">
       <div className="panel-header">
-        <h2 className="panel-title">
-          Active Deck Components · {view.deckComponents.length} Cards ({view.ruleset.name})
-        </h2>
+        <div>
+          <h2 className="panel-title">
+            Card Catalogue (Deck Composition) · {view.deckComponents.length} Cards ({view.ruleset.name})
+          </h2>
+          <div className="brand-sub">
+            Static suit-by-suit card catalogue with visibility-safe known locations. To inspect the
+            live ordered draw pile, click <strong>Deck of Days</strong> directly on the Play Table.
+          </div>
+        </div>
         <span className="badge badge-ok">
           View:{' '}
           {viewer.role === 'admin'

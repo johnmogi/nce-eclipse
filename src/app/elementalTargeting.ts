@@ -134,9 +134,9 @@ export function getElementalTargetContext(
         days: false,
         boardEvent: false,
         boardCenter: false,
-        veil: eligibleVeilCardIds.length > 0
+        veil: view.zoneAccess.canResurfaceFromVeil && eligibleVeilCardIds.length > 0
       },
-      eligibleVeilCardIds,
+      eligibleVeilCardIds: view.zoneAccess.canResurfaceFromVeil ? eligibleVeilCardIds : [],
       canSwapBoard: false
     };
   }
@@ -148,7 +148,7 @@ export function getElementalTargetContext(
       bonus,
       strength,
       eligibleZones: {
-        days: view.daysCount >= 2,
+        days: view.zoneAccess.canManipulateDays && view.daysCount >= 2,
         boardEvent: hasEvent,
         boardCenter: hasCenter,
         veil: false
@@ -165,7 +165,7 @@ export function getElementalTargetContext(
       bonus,
       strength,
       eligibleZones: {
-        days: view.daysCount >= 1,
+        days: view.zoneAccess.canManipulateDays && view.daysCount >= 1,
         boardEvent: hasEvent,
         boardCenter: hasCenter,
         veil: false
@@ -182,7 +182,7 @@ export function getElementalTargetContext(
     bonus,
     strength,
     eligibleZones: {
-      days: view.daysCount >= 2,
+      days: view.zoneAccess.canManipulateDays && view.daysCount >= 2,
       boardEvent: hasEvent,
       boardCenter: hasCenter,
       veil: false

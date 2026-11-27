@@ -472,6 +472,35 @@ export interface DeckComponentStatus {
   readonly knownLocation: string;
 }
 
+export type ZoneVisibilityMode = 'full' | 'top_only' | 'hidden';
+
+export interface ZoneVisibilityState {
+  readonly days: ZoneVisibilityMode;
+  readonly veil: ZoneVisibilityMode;
+}
+
+export interface ZoneAccessState {
+  readonly canInspectDays: boolean;
+  readonly canManipulateDays: boolean;
+  readonly canInspectVeil: boolean;
+  readonly canResurfaceFromVeil: boolean;
+}
+
+export type ProjectedOrderedZoneItem =
+  | {
+      readonly position: number;
+      readonly hidden: false;
+      readonly card: Card;
+      readonly backGroup: BackGroup;
+      readonly movementHistory: readonly string[];
+    }
+  | {
+      readonly position: number;
+      readonly hidden: true;
+      readonly backGroup: BackGroup;
+      readonly label: string;
+    };
+
 export interface ProjectedGameView {
   readonly viewer: Viewer;
   readonly engineVersion: string;
@@ -488,6 +517,10 @@ export interface ProjectedGameView {
   readonly daysTopBackGroup: BackGroup | null;
   readonly daysCards: readonly Card[] | null;
   readonly veil: readonly Card[];
+  readonly zoneVisibility: ZoneVisibilityState;
+  readonly zoneAccess: ZoneAccessState;
+  readonly daysBrowserItems: readonly ProjectedOrderedZoneItem[];
+  readonly veilBrowserItems: readonly ProjectedOrderedZoneItem[];
   readonly reserveCount: number;
   readonly reserveCards: readonly Card[] | null;
   readonly eventRevealed: boolean;

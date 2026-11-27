@@ -9,9 +9,12 @@ import type {
   GameState,
   ProjectedBoardSlotItem,
   ProjectedGameView,
+  ProjectedOrderedZoneItem,
   ProjectedPlayerView,
   ProjectedReadingView,
-  Viewer
+  Viewer,
+  ZoneAccessState,
+  ZoneVisibilityState
 } from './types.js';
 
 function mapCardIds(ids: readonly string[], cards: Readonly<Record<string, Card>>): Card[] {
@@ -296,6 +299,115 @@ export function projectView(state: GameState, viewer: Viewer): ProjectedGameView
     };
   });
 
+function resolveZoneVisibilityAndAccess(
+  state: GameState,
+  viewer: Viewer
+): { zoneVisibility: ZoneVisibilityState; zoneAccess: ZoneAccessState } {
+  const isAdmin = viewer.role === 'admin';
+  const hasReflection = state.activeEffects.some((e) => e.effectId === 'moon_reflection');
+  const hasGardenGates = state.activeEffects.some((e) => e.effectId === 'garden_gates');
+
+  // Admin God Mode always retains full read-only visibility across all zones.
+  const zoneVisibility: ZoneVisibilityState = isAdmin
+    ? { days: 'full', veil: 'full' }
+    : hasReflection
+      ? { days: 'top_only', veil: 'top_only' }
+      : { days: 'hidden', veil: 'full' };
+
+  // Accessibility is strictly separated from visibility:
+  // Moon Reflection alters visibility WITHOUT removing Water's underlying Veil retrieval ability;
+  // Garden Gates restricts zone accessibility independently of visibility.
+  const zoneAccess: ZoneAccessState = {
+    canInspectDays: true,
+    canManipulateDays: !hasGardenGates,
+    canInspectVeil: true,
+    canResurfaceFromVeil: !hasGardenGates
+  };
+
+  return { zoneVisibility, zoneAccess };
+}
+
+function buildMovementHistoryByCard(events: readonly GameEvent[]): Map<string, string[]> {
+  const history = new Map<string, string[]>();
+  for (const ev of events) {
+    if (ev.affectedCardIds.length === 0) continue;
+    if (
+      ev.type !== 'CardMoved' &&
+      ev.type !== 'CenterDiscarded' &&
+      ev.type !== 'CenterAbandoned' &&
+      ev.type !== 'AbandonedCardDeclined' &&
+      ev.type !== 'HandCardDiscarded' &&
+      ev.type !== 'ElementalEffectResolved'
+    ) {
+      continue;
+    }
+    const label = `R${ev.round}·T${ev.turn} · ${ev.reason}`;
+    for (const id of ev.affectedCardIds) {
+      const list = history.get(id) ?? [];
+      if (list[list.length - 1] !== label) {
+        list.push(label);
+      }
+      history.set(id, list);
+    }
+  }
+  return history;
+}
+
+function buildOrderedZoneItems(params: {
+  cardIds: readonly string[];
+  cards: Readonly<Record<string, Card>>;
+  visibilityMode: 'full' | 'top_only' | 'hidden';
+  movementHistory: Map<string, string[]>;
+  hiddenLabel: string;
+}): ProjectedOrderedZoneItem[] {
+  const { cardIds, cards, visibilityMode, movementHistory, hiddenLabel } = params;
+  return cardIds.map((id, idx) => {
+    const card = cards[id]!;
+    const position = idx + 1;
+    const isVisible =
+      visibilityMode === 'full' || (visibilityMode === 'top_only' && idx === 0);
+
+    if (!isVisible) {
+      return {
+        position,
+        hidden: true,
+        backGroup: card.backGroup,
+        label: hiddenLabel
+      };
+    }
+
+    return {
+      position,
+      hidden: false,
+      card,
+      backGroup: card.backGroup,
+      movementHistory: movementHistory.get(id) ?? ['Setup deal']
+    };
+  });
+}
+
+  const projectedEvents = projectEvents(state.events, viewer, state.ruleset.name);
+  const { zoneVisibility, zoneAccess } = resolveZoneVisibilityAndAccess(state, viewer);
+  const movementHistory = buildMovementHistoryByCard(projectedEvents);
+
+  const daysBrowserItems = buildOrderedZoneItems({
+    cardIds: state.days,
+    cards: state.cards,
+    visibilityMode: zoneVisibility.days,
+    movementHistory,
+    hiddenLabel: 'Concealed draw card'
+  });
+
+  // Veil browser is ordered newest discard first (#1 = Top)
+  const veilNewestFirstIds = [...state.veil].reverse();
+  const veilBrowserItems = buildOrderedZoneItems({
+    cardIds: veilNewestFirstIds,
+    cards: state.cards,
+    visibilityMode: zoneVisibility.veil,
+    movementHistory,
+    hiddenLabel: 'Concealed Veil history'
+  });
+
   return {
     viewer,
     engineVersion: state.engineVersion,
@@ -312,6 +424,10 @@ export function projectView(state: GameState, viewer: Viewer): ProjectedGameView
     daysTopBackGroup: topDaysCard ? topDaysCard.backGroup : null,
     daysCards: isAdmin ? mapCardIds(state.days, state.cards) : null,
     veil: mapCardIds(state.veil, state.cards),
+    zoneVisibility,
+    zoneAccess,
+    daysBrowserItems,
+    veilBrowserItems,
     reserveCount: state.reserve.length,
     reserveCards: isAdmin ? mapCardIds(state.reserve, state.cards) : null,
     eventRevealed: state.eventRevealed,
@@ -329,7 +445,7 @@ export function projectView(state: GameState, viewer: Viewer): ProjectedGameView
     players,
     deckComponents: buildDeckComponents(state, viewer, canInspectCenter),
     legalActions: getLegalActionsForState(state, viewer),
-    events: projectEvents(state.events, viewer, state.ruleset.name),
+    events: projectedEvents,
     commandCount: state.commandHistory.length
   };
 }

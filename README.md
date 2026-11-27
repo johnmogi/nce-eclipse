@@ -16,6 +16,7 @@ Local-first deterministic TypeScript rules engine, headless CLI simulation lab, 
   - `tests/milestone-d1.test.ts` (D0 privacy/rotation fixes, D1 Elemental Activation Cost, Water self-resurface regression, Reader Bonus spending/expiry, and 500-run D1 gate)
   - `tests/elemental-ui-targeting.test.ts` (D1.1 direct card-to-zone targeting & Water resurface acceptance walkthrough)
   - `tests/human-vs-bot.test.ts` (D1.2 autonomous Bot opening reading, permanent Primary Aces, fair role-masked AI, and multi-round replay)
+  - `tests/deck-veil-browser.test.ts` (D1.3 ordered Deck of Days & Veil browsers, visibility vs. accessibility separation for Moon Reflection / Garden Gates, and read-only Admin inspection)
 
 ## Implemented Rules Scope (Milestones A–D1)
 

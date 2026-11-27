@@ -18,6 +18,8 @@ import {
 } from '../elementalTargeting.js';
 import { CardBack } from './CardBack.js';
 import { CardTile } from './CardTile.js';
+import { DeckDaysBrowser } from './DeckDaysBrowser.js';
+import { VeilBrowser } from './VeilBrowser.js';
 
 const ELEMENT_VERB_HINT: Readonly<Record<Element, string>> = {
   air: 'Shuffle — click Deck of Days or an occupied Board card to shuffle unpredictably.',
@@ -75,7 +77,9 @@ export function GameTable({
   selectedSacrificeIds,
   elementalSelection,
   elementalCtx,
+  daysBrowserOpen,
   veilTrayOpen,
+  onToggleDaysBrowser,
   onToggleVeilTray,
   onReturnToLive,
   onSwitchViewer,
@@ -108,7 +112,9 @@ export function GameTable({
   selectedSacrificeIds: readonly string[];
   elementalSelection: ElementalSelectionState;
   elementalCtx: ElementalTargetContext;
+  daysBrowserOpen: boolean;
   veilTrayOpen: boolean;
+  onToggleDaysBrowser: () => void;
   onToggleVeilTray: () => void;
   onReturnToLive: () => void;
   onSwitchViewer: (next: Viewer) => void;
@@ -339,32 +345,42 @@ export function GameTable({
         {/* ZONE 1: DECK OF DAYS */}
         <div
           className={`table-zone ${daysClickable ? 'zone-target-eligible' : ''} ${
-            elementalSelection.daysSelected ? 'zone-target-selected' : ''
+            elementalSelection.daysSelected || daysBrowserOpen ? 'zone-target-selected' : ''
           }`}
-          onClick={daysClickable ? onClickDaysZone : undefined}
-          role={daysClickable ? 'button' : undefined}
-          tabIndex={daysClickable ? 0 : undefined}
-          onKeyDown={
-            daysClickable
-              ? (e) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault();
-                    onClickDaysZone();
-                  }
-                }
-              : undefined
-          }
+          onClick={daysClickable ? onClickDaysZone : onToggleDaysBrowser}
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              if (daysClickable) onClickDaysZone();
+              else onToggleDaysBrowser();
+            }
+          }}
         >
           <div className="table-zone-title">DECK OF DAYS</div>
           <div className="table-zone-visual">
             {view.daysCount > 0 ? (
-              <CardBack
-                backGroup={view.daysTopBackGroup ?? 'minor'}
-                stacked
-                size="md"
-                highlighted={daysClickable}
-                selected={elementalSelection.daysSelected}
-              />
+              view.zoneVisibility.days === 'top_only' &&
+              view.daysBrowserItems[0] &&
+              !view.daysBrowserItems[0].hidden ? (
+                <div
+                  className={`veil-top-card ${
+                    view.daysBrowserItems[0].card.color === 'red' ? 'color-red' : 'color-black'
+                  } ${daysClickable ? 'target-highlight' : ''}`}
+                >
+                  <div className="veil-top-glyph">{view.daysBrowserItems[0].card.shortLabel}</div>
+                  <div className="veil-top-label">Top Revealed</div>
+                </div>
+              ) : (
+                <CardBack
+                  backGroup={view.daysTopBackGroup ?? 'minor'}
+                  stacked
+                  size="md"
+                  highlighted={daysClickable}
+                  selected={elementalSelection.daysSelected}
+                />
+              )
             ) : (
               <div className="empty-card-outline">Empty</div>
             )}
@@ -377,12 +393,22 @@ export function GameTable({
               ? elementalSelection.daysSelected
                 ? `Targeted (${activeElement === 'earth' ? 'reorder below' : `${elementalSelection.daysCount} card${elementalSelection.daysCount === 1 ? '' : 's'}`})`
                 : `Click to target (${activeElement?.toUpperCase()})`
-              : 'Unknown future'}
+              : daysBrowserOpen
+                ? 'Hide draw pile ▲'
+                : viewer.role === 'admin'
+                  ? 'Click to browse full order ▾'
+                  : 'Unknown future · Browse stack ▾'}
           </div>
-          {view.daysCards !== null && view.daysCards.length > 0 && (
-            <div className="admin-peek-strip mono">
-              Next: {view.daysCards.slice(0, 4).map((c) => c.shortLabel).join(' · ')}
-            </div>
+          {daysClickable && (
+            <button
+              className="btn btn-sm zone-browse-btn"
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleDaysBrowser();
+              }}
+            >
+              {daysBrowserOpen ? 'Hide Deck ▲' : 'Browse Deck ▾'}
+            </button>
           )}
         </div>
 
@@ -577,55 +603,21 @@ export function GameTable({
         </div>
       </div>
 
-      {/* EXPANDABLE FACE-UP VEIL HISTORY TRAY (AUTO-OPENS FOR WATER) */}
+      {/* EXPANDABLE ORDERED DECK OF DAYS BROWSER (READ-ONLY) */}
+      {daysBrowserOpen && (
+        <DeckDaysBrowser view={view} viewer={viewer} onClose={onToggleDaysBrowser} />
+      )}
+
+      {/* EXPANDABLE COMPLETE VEIL BROWSER (NEWEST FIRST · AUTO-OPENS FOR WATER) */}
       {(veilTrayOpen || activeElement === 'water') && (
-        <div className={`veil-tray ${activeElement === 'water' ? 'veil-tray-water' : ''}`}>
-          <div className="veil-tray-header">
-            <div>
-              <strong>The Veil — Face-Up Discard History ({view.veil.length})</strong>
-              {activeElement === 'water' && (
-                <span className="brand-sub" style={{ marginLeft: 8 }}>
-                  Click up to {elementalCtx.strength} card
-                  {elementalCtx.strength === 1 ? '' : 's'} to resurface → Deck of Days (
-                  {view.ruleset.waterResurfaceDestination}).
-                  {elementalCtx.sourceCard
-                    ? ` ${elementalCtx.sourceCard.shortLabel} enters Veil on confirm and cannot resurface itself.`
-                    : ''}
-                </span>
-              )}
-            </div>
-            <button className="btn btn-sm" onClick={onToggleVeilTray}>
-              {veilTrayOpen ? 'Close Veil' : 'Collapse'}
-            </button>
-          </div>
-          {view.veil.length === 0 ? (
-            <div className="brand-sub">No cards in the Veil yet.</div>
-          ) : (
-            <div className="card-list">
-              {[...view.veil].reverse().map((card) => {
-                const isWaterMode = activeElement === 'water' && isElementalWindow;
-                const selIdx = elementalSelection.veilCardIds.indexOf(card.id);
-                const isSelected = selIdx >= 0;
-                const isEligible = elementalCtx.eligibleVeilCardIds.includes(card.id);
-                const atCap =
-                  isWaterMode &&
-                  !isSelected &&
-                  elementalSelection.veilCardIds.length >= elementalCtx.strength;
-                return (
-                  <CardTile
-                    key={card.id}
-                    card={card}
-                    compact
-                    selected={isWaterMode && isSelected}
-                    selectionOrder={isWaterMode && isSelected ? selIdx + 1 : undefined}
-                    disabled={isWaterMode && (!isEligible || atCap)}
-                    onClick={isWaterMode ? () => onToggleVeilCard(card.id) : undefined}
-                  />
-                );
-              })}
-            </div>
-          )}
-        </div>
+        <VeilBrowser
+          view={view}
+          isWaterMode={activeElement === 'water' && isElementalWindow}
+          elementalSelection={elementalSelection}
+          elementalCtx={elementalCtx}
+          onToggleVeilCard={onToggleVeilCard}
+          onClose={onToggleVeilTray}
+        />
       )}
 
       {/* ===================================================================== */}

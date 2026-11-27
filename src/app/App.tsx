@@ -43,7 +43,7 @@ import {
   toggleVeilTargetSelection,
   type ElementalSelectionState
 } from './elementalTargeting.js';
-import { loadActiveSession, saveActiveSession } from './storage.js';
+import { loadActiveSession, saveActiveSession, type PersistedSession } from './storage.js';
 
 type ActiveTab = 'play' | 'deck' | 'rules' | 'lab';
 
@@ -124,7 +124,9 @@ export function App() {
   const [elementalSelection, setElementalSelection] = useState<ElementalSelectionState>(
     INITIAL_ELEMENTAL_SELECTION
   );
+  const [daysBrowserOpen, setDaysBrowserOpen] = useState<boolean>(false);
   const [veilTrayOpen, setVeilTrayOpen] = useState<boolean>(false);
+  const [pendingSavedSession, setPendingSavedSession] = useState<PersistedSession | null>(null);
 
   const [storageKind, setStorageKind] = useState<string>('local');
   const [notice, setNotice] = useState<string | null>(null);
@@ -163,15 +165,12 @@ export function App() {
     void loadActiveSession().then((saved) => {
       if (cancelled) return;
       hydratedRef.current = true;
-      if (!saved || saved.ruleset.version !== '1.4.0' || saved.commands.length === 0) return;
+      if (!saved || saved.ruleset.version !== '1.4.0' || saved.commands.length <= 1) return;
+      // Never silently hijack a fresh Turn 1 opening with a stale mid-turn saved game;
+      // offer an explicit one-click Resume banner instead.
       const rep = replay(saved.seed, saved.ruleset, saved.commands);
       if (rep.ok) {
-        setRuleset(saved.ruleset);
-        setSeed(saved.seed);
-        setDraftSeedInput(saved.seed);
-        setRulesDraft(rulesetToDraft(saved.ruleset));
-        setLiveState(rep.finalState);
-        setStorageKind('restored');
+        setPendingSavedSession(saved);
       }
     });
     return () => {
@@ -590,7 +589,7 @@ export function App() {
               Play Table
             </button>
             <button className={`btn btn-sm ${tab === 'deck' ? 'btn-active' : ''}`} onClick={() => setTab('deck')}>
-              Deck ({view.deckComponents.length})
+              Card Catalogue ({view.deckComponents.length})
             </button>
             <button className={`btn btn-sm ${tab === 'rules' ? 'btn-active' : ''}`} onClick={() => setTab('rules')}>
               Rules
@@ -717,6 +716,30 @@ export function App() {
         </div>
       </header>
 
+      {pendingSavedSession && (
+        <div className="banner-ok" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
+          <span>
+            Saved session available (seed <code className="mono">{pendingSavedSession.seed}</code> ·{' '}
+            {pendingSavedSession.commands.length} commands). Fresh Turn 1 is loaded below.
+          </span>
+          <div className="toolbar-group">
+            <button
+              className="btn btn-sm btn-primary"
+              onClick={() => {
+                const s = pendingSavedSession;
+                setPendingSavedSession(null);
+                startNewGame(s.ruleset, s.seed, s.commands);
+                setStorageKind('restored');
+              }}
+            >
+              Resume Saved Game
+            </button>
+            <button className="btn btn-sm" onClick={() => setPendingSavedSession(null)}>
+              Dismiss
+            </button>
+          </div>
+        </div>
+      )}
       {notice && <div className="banner-warn">{notice}</div>}
       {copyFeedback && <div className="banner-ok">{copyFeedback}</div>}
 
@@ -739,7 +762,9 @@ export function App() {
             selectedSacrificeIds={selectedSacrificeIds}
             elementalSelection={elementalSelection}
             elementalCtx={elementalCtx}
+            daysBrowserOpen={daysBrowserOpen}
             veilTrayOpen={veilTrayOpen}
+            onToggleDaysBrowser={() => setDaysBrowserOpen((open) => !open)}
             onToggleVeilTray={() => setVeilTrayOpen((open) => !open)}
             onReturnToLive={() => {
               setReplayPlaying(false);
