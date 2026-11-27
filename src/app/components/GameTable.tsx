@@ -173,9 +173,13 @@ export function GameTable({
       : view.ruleset.eclipseVictoryCount;
 
   const topVeilCard = view.veil.length > 0 ? view.veil[view.veil.length - 1]! : null;
-  const availableBonuses = activePlayer.pendingReaderBonuses.filter(
-    (b) => b.status === 'available' && b.earnedOnTurn < view.turn && Boolean(b.sourceElement)
-  );
+  const canUseReaderBonusNow =
+    !activePlayer.effectUsedThisTurn || !view.ruleset.readerBonusConsumesTurnAction;
+  const availableBonuses = canUseReaderBonusNow
+    ? activePlayer.pendingReaderBonuses.filter(
+        (b) => b.status === 'available' && b.earnedOnTurn < view.turn && Boolean(b.sourceElement)
+      )
+    : [];
 
   // In Human vs Bot, primary hand is always Human (p1) unless Admin inspects active player
   const focusedPlayer =
@@ -184,6 +188,20 @@ export function GameTable({
       : isHumanVsBot
         ? view.players.find((p) => p.id === humanPlayerId) ?? activePlayer
         : activePlayer;
+
+  const focusedHandHasCards = focusedPlayer.hand !== null && focusedPlayer.hand.length > 0;
+  const setupDealEvent = view.events.find(
+    (e) =>
+      e.type === 'CardMoved' &&
+      e.source === 'setup-deal' &&
+      e.actor === focusedPlayer.id
+  );
+  const setupEvoEvents = view.events.filter(
+    (e) =>
+      e.type === 'LineageEvolved' &&
+      e.source === 'setup-deal' &&
+      e.actor === focusedPlayer.id
+  );
 
   const canSelectSacrifice =
     view.phase === 'AWAITING_EVENT_RESOLUTION' &&
@@ -201,7 +219,8 @@ export function GameTable({
   const canPickElementalHandCard =
     isElementalWindow &&
     focusedPlayer.id === view.activePlayerId &&
-    !focusedPlayer.effectUsedThisTurn;
+    !focusedPlayer.effectUsedThisTurn &&
+    focusedHandHasCards;
 
   const maxDaysPick = Math.min(
     view.daysCount,
@@ -362,9 +381,22 @@ export function GameTable({
                     </span>
                   )}
                   {p.availableReaderBonusCount > 0 ? (
-                    <span className="badge badge-warn">
-                      ★ {p.availableReaderBonusCount} Bonus Ready
-                    </span>
+                    isElementalWindow &&
+                    p.id === view.activePlayerId &&
+                    availableBonuses.length > 0 ? (
+                      <button
+                        type="button"
+                        className="badge badge-warn badge-clickable"
+                        title="Click to activate your free Reader Bonus elemental effect"
+                        onClick={() => onSelectBonusForElemental(availableBonuses[0]!.id)}
+                      >
+                        ★ {p.availableReaderBonusCount} Bonus Ready — Click to Activate
+                      </button>
+                    ) : (
+                      <span className="badge badge-warn">
+                        ★ {p.availableReaderBonusCount} Bonus Ready
+                      </span>
+                    )
                   ) : p.pendingReaderBonusCount > 0 ? (
                     <span className="badge">+{p.pendingReaderBonusCount} Bonus Next Turn</span>
                   ) : null}
@@ -1001,9 +1033,11 @@ export function GameTable({
                 <div className="brand-sub">
                   {activeElement
                     ? ELEMENT_VERB_HINT[activeElement]
-                    : preReadingElemental
-                      ? 'Influence the Deck of Days, Shared Board (including Major Courts), or Veil BEFORE your Reading — or proceed straight to Reading.'
-                      : 'Click any highlighted card in your hand below (consumes card → Veil), then click the highlighted Deck, Board, or Veil zone to confirm.'}
+                    : !focusedHandHasCards && availableBonuses.length > 0
+                      ? 'Your hand is empty, but you have a free Reader Bonus ready! Click the gold ★ Activate button below (0 hand cost), choose your target on the table, then click Confirm — or proceed straight to Reading.'
+                      : preReadingElemental
+                        ? 'Click a card in your hand (or a free Reader Bonus below) to influence Deck of Days, Shared Board, or Veil BEFORE your Reading — or proceed straight to Reading.'
+                        : 'Click any highlighted card in your hand below (consumes card → Veil) or a free Reader Bonus, then click the highlighted Deck, Board, or Veil zone to confirm.'}
                 </div>
               </div>
 
@@ -1051,23 +1085,34 @@ export function GameTable({
             </div>
 
             {availableBonuses.length > 0 && canActAsActivePlayer && (
-              <div className="bonus-pill-row">
-                <span className="badge badge-warn">Provisional Reader Bonus (0 hand cost):</span>
-                {availableBonuses.map((b) => (
-                  <button
-                    key={b.id}
-                    className={`btn btn-sm ${
+              <div className="bonus-cta-strip">
+                <div className="bonus-cta-meta">
+                  <span className="badge badge-warn">Free Reader Bonus (0 hand cost)</span>
+                  <span className="brand-sub">
+                    Click to activate, pick a target on the highlighted zone, then click Confirm.
+                  </span>
+                </div>
+                <div className="toolbar-group">
+                  {availableBonuses.map((b) => {
+                    const el = b.sourceElement!;
+                    const isSelected =
                       elementalSelection.sourceKind === 'bonus' &&
-                      elementalSelection.bonusId === b.id
-                        ? 'btn-active'
-                        : ''
-                    }`}
-                    onClick={() => onSelectBonusForElemental(b.id)}
-                  >
-                    ★ Use {ELEMENT_META[b.sourceElement!].suitSymbol}{' '}
-                    {ELEMENT_META[b.sourceElement!].label} Tier 1 (Expires after T{view.turn})
-                  </button>
-                ))}
+                      elementalSelection.bonusId === b.id;
+                    return (
+                      <button
+                        key={b.id}
+                        type="button"
+                        className={`btn ${isSelected ? 'btn-warn-active' : 'btn-warn'}`}
+                        onClick={() => onSelectBonusForElemental(b.id)}
+                      >
+                        {isSelected ? '✓ Active: ' : '★ Activate '}
+                        {ELEMENT_META[el].suitSymbol} {ELEMENT_META[el].label} (
+                        {ELEMENT_SHORT_VERB[el].split(' ')[1]}) · Tier 1 Free · Expires after T
+                        {view.turn}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             )}
 
@@ -1315,10 +1360,32 @@ export function GameTable({
           </span>
         </div>
 
+        {view.turn === 1 && setupEvoEvents.length > 0 && (
+          <div className="setup-evo-note">
+            <strong>Setup Evolution Notice:</strong>{' '}
+            {setupDealEvent
+              ? `${setupDealEvent.summary} `
+              : `Starting hand dealt ${view.ruleset.startingHandSize} cards. `}
+            Mandatory chained evolution immediately advanced your lineage {setupEvoEvents.length}{' '}
+            step{setupEvoEvents.length === 1 ? '' : 's'} to{' '}
+            <strong>{focusedPlayer.lineage.topCard.shortLabel}</strong> (Rank{' '}
+            {focusedPlayer.lineage.rank}), leaving {focusedPlayer.handCount} card
+            {focusedPlayer.handCount === 1 ? '' : 's'} in hand.
+          </div>
+        )}
+
         {focusedPlayer.hand === null ? (
           <div className="badge">Hidden ({focusedPlayer.handCount} cards)</div>
         ) : focusedPlayer.hand.length === 0 ? (
-          <div className="brand-sub">Hand is empty.</div>
+          <div className="brand-sub">
+            {focusedPlayer.evolutionsCompleted > 0
+              ? `Hand is empty — mandatory evolution consumed your dealt/claimed cards to advance your lineage to ${focusedPlayer.lineage.topCard.shortLabel} (Rank ${focusedPlayer.lineage.rank}, ${focusedPlayer.evolutionsCompleted} evolution${focusedPlayer.evolutionsCompleted === 1 ? '' : 's'}).`
+              : 'Hand is empty.'}
+            {isElementalWindow &&
+              focusedPlayer.id === view.activePlayerId &&
+              availableBonuses.length > 0 &&
+              ' You can still spend your free Reader Bonus above (0 hand cost).'}
+          </div>
         ) : (
           <div className="hand-cards-grid">
             {focusedPlayer.hand.map((card) => {

@@ -206,4 +206,81 @@ describe('Milestone D1.1 — Direct Card-to-Zone Elemental UI Targeting', () => 
     expect(sAfter.players[1]!.pendingReaderBonuses[0]!.status).toBe('consumed');
     expect(checkInvariants(sAfter).ok).toBe(true);
   });
+
+  it('Milestone E pre-reading Water Reader Bonus activates cleanly even when active player hand is empty (0 cards)', () => {
+    const me = cloneRulesetWithOverrides(RULESET_PRESETS['poker-proto-e']!, {
+      waterResurfaceDestination: 'top'
+    });
+    let s = createGame(me, 'me-empty-hand-water-bonus', {
+      startingElements: ['air', 'fire'],
+      overrideHands: [
+        // All 3 starting cards immediately chain-evolve A♠ -> 3♠ -> 4♠ -> 6♣, leaving p1 hand empty (0)!
+        ['classic-air-03', 'classic-air-04', 'classic-fire-06'],
+        ['classic-earth-09', 'classic-water-09', 'classic-earth-08']
+      ],
+      overrideDaysTop: [
+        'classic-fire-07', // T1 Event (Treasure)
+        'classic-fire-08', // T1 Center (evolves p1 6♣ -> 8♣, hand stays 0!)
+        'classic-earth-07', // T2 Event (Treasure)
+        'classic-water-07', // T2 Center (p2 discards/claims -> p1 earns Water Reader Bonus)
+        'classic-air-07', // T3 Event
+        'classic-water-06' // T3 Center
+      ],
+      overrideVeil: ['classic-earth-05']
+    });
+
+    // Confirm p1 starts with 0 cards in hand because all 3 starting cards evolved!
+    expect(s.players[0]!.hand).toEqual([]);
+    expect(s.players[0]!.evolutionsCompleted).toBe(3);
+
+    // Turn 1 (p1): skip prep -> Reading -> Pursue -> Resolve Treasure (8♣ evolves -> hand still 0!) -> EndTurn
+    s = mustDispatch(s, { type: 'AdvanceToReading', playerId: 'p1' });
+    s = mustDispatch(s, { type: 'GiveReading', playerId: 'p2', advice: 'good' });
+    s = mustDispatch(s, { type: 'PursueCenter', playerId: 'p1' });
+    s = mustDispatch(s, { type: 'ResolveEvent', playerId: 'p1', sacrificeCardIds: [] });
+    s = mustDispatch(s, { type: 'EndTurn', playerId: 'p1' });
+    expect(s.players[0]!.hand).toEqual([]);
+    expect(s.players[0]!.evolutionsCompleted).toBe(4);
+
+    // Turn 2 (p2): skip prep -> p1 advises GOOD -> p2 pursues & claims 7♥ -> p1 earns Water Reader Bonus!
+    s = mustDispatch(s, { type: 'AdvanceToReading', playerId: 'p2' });
+    s = mustDispatch(s, { type: 'GiveReading', playerId: 'p1', advice: 'good' });
+    s = mustDispatch(s, { type: 'PursueCenter', playerId: 'p2' });
+    s = mustDispatch(s, { type: 'ResolveEvent', playerId: 'p2', sacrificeCardIds: [] });
+    s = mustDispatch(s, { type: 'EndTurn', playerId: 'p2' });
+
+    // Turn 3 (p1): AWAITING_ELEMENTAL_ACTION with empty hand + Water Tier 1 Reader Bonus ready!
+    expect(s.turn).toBe(3);
+    expect(s.activePlayerId).toBe('p1');
+    expect(s.phase).toBe('AWAITING_ELEMENTAL_ACTION');
+    expect(s.players[0]!.hand).toEqual([]);
+
+    const p1View = projectView(s, { role: 'player', playerId: 'p1' });
+    const p1 = p1View.players.find((p) => p.id === 'p1')!;
+    expect(p1.hand).toEqual([]);
+    expect(p1.availableReaderBonusCount).toBe(1);
+
+    const waterBonus = p1.pendingReaderBonuses.find(
+      (b) => b.status === 'available' && b.earnedOnTurn < p1View.turn
+    )!;
+    expect(waterBonus.sourceElement).toBe('water');
+
+    let sel = selectBonusForElemental(waterBonus.id, p1View);
+    const ctx = getElementalTargetContext(p1View, p1, sel);
+    expect(ctx.activeElement).toBe('water');
+    expect(ctx.strength).toBe(1);
+    expect(ctx.eligibleZones.veil).toBe(true);
+    expect(ctx.eligibleVeilCardIds).toContain('classic-earth-05');
+
+    sel = toggleVeilTargetSelection(sel, 'classic-earth-05', ctx);
+    const built = buildElementalCommand(p1View, sel, ctx);
+    expect(built.ok).toBe(true);
+    if (!built.ok) return;
+
+    const sAfter = mustDispatch(s, built.command);
+    expect(sAfter.days[0]).toBe('classic-earth-05');
+    expect(sAfter.players[0]!.hand).toEqual([]);
+    expect(sAfter.players[0]!.pendingReaderBonuses.find((b) => b.id === waterBonus.id)?.status).toBe('consumed');
+    expect(checkInvariants(sAfter).ok).toBe(true);
+  });
 });
