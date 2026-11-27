@@ -986,12 +986,22 @@ export function GameTable({
               <div>
                 <h2 className="decision-title">
                   {liveReconciliation.reality === 'treasure'
-                    ? 'Treasure Revealed — Claim Center Freely'
+                    ? 'Treasure Revealed — Free Claim'
                     : liveReconciliation.reality === 'barrier'
-                      ? `Barrier (${liveReconciliation.eventVP} VP) — Reconcile or Abandon`
-                      : `Elemental Trial (> ${liveReconciliation.eventVP} VP) — Reconcile or Abandon`}
+                      ? liveReconciliation.passes && selectedSacrificeIds.length === 0
+                        ? `Barrier (${liveReconciliation.eventVP} VP) — Cleared by Your Lineage`
+                        : `Barrier (${liveReconciliation.eventVP} VP) — Sacrifice to Claim or Abandon`
+                      : liveReconciliation.passes && selectedSacrificeIds.length === 0
+                        ? `Elemental Trial (> ${liveReconciliation.eventVP} VP) — Cleared by Your Lineage`
+                        : `Elemental Trial (> ${liveReconciliation.eventVP} VP) — Sacrifice to Claim or Abandon`}
                 </h2>
-                <div className="brand-sub">{liveReconciliation.requiredCondition}</div>
+                <div className="brand-sub">
+                  {liveReconciliation.reality !== 'treasure' &&
+                  liveReconciliation.passes &&
+                  selectedSacrificeIds.length === 0
+                    ? `Your lineage already meets this ${liveReconciliation.reality} (${liveReconciliation.effectiveVP} VP${liveReconciliation.hasElementalAdvantage ? ' + elemental advantage' : ''}) — no hand sacrifice needed.`
+                    : liveReconciliation.requiredCondition}
+                </div>
               </div>
               <div className="toolbar-group">
                 <button
@@ -1007,19 +1017,24 @@ export function GameTable({
                 >
                   {liveReconciliation.reality === 'treasure'
                     ? 'Claim Treasure'
-                    : liveReconciliation.reality === 'barrier'
-                      ? `Reconcile Barrier (${selectedSacrificeIds.length} sacrifice)`
-                      : `Pass Trial (${selectedSacrificeIds.length} sacrifice)`}
+                    : !liveReconciliation.passes
+                      ? 'Select Sacrifice Card(s) Below'
+                      : selectedSacrificeIds.length === 0
+                        ? 'Claim Card (No Sacrifice Needed)'
+                        : `Sacrifice ${selectedSacrificeIds.length} Card${
+                            selectedSacrificeIds.length === 1 ? '' : 's'
+                          } & Claim`}
                 </button>
                 {liveReconciliation.reality !== 'treasure' && (
                   <button
                     className="btn"
                     disabled={!canActAsActivePlayer}
+                    title="Leave Center face-up for the next player instead of taking it into your hand"
                     onClick={() =>
                       onSendCommand({ type: 'AbandonCenter', playerId: view.activePlayerId })
                     }
                   >
-                    Abandon Center
+                    Leave for Next Player
                   </button>
                 )}
                 {selectedSacrificeIds.length > 0 && (

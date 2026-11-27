@@ -51,6 +51,11 @@ const DEFAULT_PRESET_ID = 'poker-proto-e';
 const DEFAULT_SEED = 'eclipse-me-001';
 const HUMAN_PLAYER_ID = 'p1';
 
+function generateFreshSeed(): string {
+  const token = Math.random().toString(36).slice(2, 7);
+  return `eclipse-${token}`;
+}
+
 function rulesetToDraft(r: Ruleset): RulesDraftState {
   return {
     colors: r.allowedEvolutionColors,
@@ -367,8 +372,10 @@ export function App() {
   ) {
     const modeToUse = options.nextMode ?? controlMode;
     setReplayPlaying(false);
+    setPendingSavedSession(null);
     setSelectedSacrificeIds([]);
     setElementalSelection(INITIAL_ELEMENTAL_SELECTION);
+    setDaysBrowserOpen(false);
     setVeilTrayOpen(false);
 
     if (initialCommands.length > 0) {
@@ -637,16 +644,30 @@ export function App() {
 
           <input
             className="input mono input-compact"
-            style={{ width: 112 }}
+            style={{ width: 120 }}
             value={draftSeedInput}
             onChange={(e) => setDraftSeedInput(e.target.value)}
-            placeholder="seed"
+            placeholder="custom seed"
+            title="Current game seed — edit to load a specific seed, or click New Game for a fresh shuffle"
           />
           <button
-            className="btn btn-sm"
-            onClick={() => startNewGame(ruleset, draftSeedInput.trim() || DEFAULT_SEED)}
+            className="btn btn-sm btn-primary"
+            title="Start a brand-new game (uses your edited custom seed if changed, otherwise generates a fresh random seed)"
+            onClick={() => {
+              const trimmed = draftSeedInput.trim();
+              const nextSeed =
+                trimmed.length > 0 && trimmed !== seed ? trimmed : generateFreshSeed();
+              startNewGame(ruleset, nextSeed);
+            }}
           >
             New Game
+          </button>
+          <button
+            className="btn btn-sm"
+            title="Restart the exact current seed from Turn 1"
+            onClick={() => startNewGame(ruleset, draftSeedInput.trim() || seed)}
+          >
+            ↺ Replay Seed
           </button>
         </div>
 

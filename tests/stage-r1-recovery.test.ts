@@ -29,8 +29,15 @@ function mustDispatch(state: GameState, cmd: Command): GameState {
 describe('Stage R1 — First-Turn Reliability, Reject-Replace, 3-Slot Board, Anytime Reader Bonus & Earth Peek', () => {
   const classicR1 = RULESET_PRESETS['poker-proto-e']!;
 
-  it('RD-01: eclipse-me-001 and 100 seeded new games guarantee BOTH players start Turn 1 with 3 playable Minor cards at Rank 1', () => {
+  it('RD-01 + Clean Turn-1 Setup Invariant: eclipse-me-001 and 100 seeded new games guarantee 3 playable Minor cards per player, EMPTY Veil (0 cards), Minor Event & Center, and 3-slot Board', () => {
     const named = createGame(classicR1, 'eclipse-me-001');
+    expect(named.status).toBe('playing');
+    expect(named.veil).toHaveLength(0);
+    expect(named.board.event).toHaveLength(1);
+    expect(named.board.center).toHaveLength(1);
+    expect(named.board.parallel).toHaveLength(1);
+    expect(named.cards[named.board.event[0]!]!.family).toBe('classic-number');
+    expect(named.cards[named.board.center[0]!]!.family).toBe('classic-number');
     expect(named.players[0]!.hand).toHaveLength(3);
     expect(named.players[1]!.hand).toHaveLength(3);
     expect(named.players[0]!.lineage.rank).toBe(1);
@@ -41,6 +48,13 @@ describe('Stage R1 — First-Turn Reliability, Reject-Replace, 3-Slot Board, Any
 
     for (let i = 1; i <= 100; i++) {
       const s = createGame(classicR1, `r1-opening-hand-${i}`);
+      expect(s.status).toBe('playing');
+      expect(s.veil).toHaveLength(0);
+      expect(s.board.event).toHaveLength(1);
+      expect(s.board.center).toHaveLength(1);
+      expect(s.board.parallel).toHaveLength(1);
+      expect(s.cards[s.board.event[0]!]!.family).toBe('classic-number');
+      expect(s.cards[s.board.center[0]!]!.family).toBe('classic-number');
       for (const p of s.players) {
         expect(p.hand).toHaveLength(3);
         expect(p.lineage.rank).toBe(1);

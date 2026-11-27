@@ -242,13 +242,48 @@ export function createGame(
     nextSeq
   };
 
+  // Populate Turn 1 Board.
+  // Invariant for normal games (!options.overrideDaysTop):
+  // - Veil MUST start completely empty (0 cards — never displace cards or trigger Turn-0 Eclipses during setup!).
+  // - Left Event and Center ALWAYS begin with concealed Minor cards.
+  // - Right Parallel (unless emptyChamberMode) receives 1 card (face-down Minor or at most 1 dormant Classic Court).
+  // When deterministic test fixtures explicitly pass `options.overrideDaysTop`, route Majors as stacked for scenario testing.
+  const isFixtureOverride = Boolean(options.overrideDaysTop && options.overrideDaysTop.length > 0);
+
+  const drawSetupMinorSkippingMajors = (): string | null => {
+    const skippedMajors: string[] = [];
+    let chosen: string | null = null;
+    while (majorBoardCtx.days.length > 0) {
+      const candidateId = majorBoardCtx.days.shift()!;
+      const candidate = catalog[candidateId]!;
+      if (ruleset.features.majors && isMajorCard(candidate)) {
+        skippedMajors.push(candidateId);
+      } else {
+        chosen = candidateId;
+        break;
+      }
+    }
+    if (skippedMajors.length > 0) {
+      const recombined = [...skippedMajors, ...majorBoardCtx.days];
+      const reshuffled = deterministicShuffle(recombined, rngState);
+      rngState = reshuffled.nextState;
+      majorBoardCtx.days.splice(0, majorBoardCtx.days.length, ...reshuffled.shuffled);
+    }
+    return chosen;
+  };
+
   let comboOutcome: GameOutcome | undefined;
 
   if (ruleset.features.barriersAndTrials && majorBoardCtx.days.length > 0 && ruleset.boardOccupancyLimits.event >= 1) {
-    const drawEv = drawNextMinorRoutingMajors(majorBoardCtx, 'event', 'turn-setup');
-    comboOutcome = drawEv.outcome;
-    if (!comboOutcome && drawEv.minorCardId) {
-      const firstEventId = drawEv.minorCardId;
+    let firstEventId: string | null = null;
+    if (isFixtureOverride) {
+      const drawEv = drawNextMinorRoutingMajors(majorBoardCtx, 'event', 'turn-setup');
+      comboOutcome = drawEv.outcome;
+      firstEventId = drawEv.minorCardId;
+    } else {
+      firstEventId = drawSetupMinorSkippingMajors();
+    }
+    if (!comboOutcome && firstEventId) {
       const firstEventCard = catalog[firstEventId]!;
       majorBoardCtx.boardEvent.push(firstEventId);
       majorBoardCtx.eventRevealed = false;
@@ -283,10 +318,15 @@ export function createGame(
   let currentReading: ReadingRecord | null = null;
 
   if (!comboOutcome && majorBoardCtx.days.length > 0 && ruleset.boardOccupancyLimits.center >= 1) {
-    const drawCtr = drawNextMinorRoutingMajors(majorBoardCtx, 'center', 'turn-setup');
-    comboOutcome = drawCtr.outcome;
-    if (!comboOutcome && drawCtr.minorCardId) {
-      const firstCenterId = drawCtr.minorCardId;
+    let firstCenterId: string | null = null;
+    if (isFixtureOverride) {
+      const drawCtr = drawNextMinorRoutingMajors(majorBoardCtx, 'center', 'turn-setup');
+      comboOutcome = drawCtr.outcome;
+      firstCenterId = drawCtr.minorCardId;
+    } else {
+      firstCenterId = drawSetupMinorSkippingMajors();
+    }
+    if (!comboOutcome && firstCenterId) {
       const firstCenterCard = catalog[firstCenterId]!;
       majorBoardCtx.boardCenter.push(firstCenterId);
 
