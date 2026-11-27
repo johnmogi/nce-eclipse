@@ -21,12 +21,18 @@ export interface SingleRunReport {
   readonly adviceFollowed: number;
   readonly deceptiveReadings: number;
   readonly readerBonusesGranted: number;
+  readonly readerBonusesConsumed: number;
+  readonly readerBonusesExpired: number;
   readonly readerBonusesWithheldOnAbandon: number;
   readonly treasuresClaimed: number;
   readonly barriersReconciled: number;
   readonly trialsPassed: number;
   readonly centersAbandoned: number;
   readonly abandonedClaimedFree: number;
+  readonly airEffectsUsed: number;
+  readonly fireEffectsUsed: number;
+  readonly waterEffectsUsed: number;
+  readonly earthEffectsUsed: number;
   readonly finalStateHash: string;
   readonly replayVerified: boolean;
   readonly invariantOk: boolean;
@@ -72,12 +78,18 @@ export interface BatchSimulationSummary {
   readonly adviceFollowPct: number;
   readonly deceptionPct: number;
   readonly avgReaderBonuses: number;
+  readonly totalReaderBonusesConsumed: number;
+  readonly totalReaderBonusesExpired: number;
   readonly totalTreasures: number;
   readonly totalBarriersPassed: number;
   readonly totalTrialsPassed: number;
   readonly totalAbandoned: number;
   readonly totalAbandonedClaimedFree: number;
   readonly totalWithheldOnAbandon: number;
+  readonly totalAirEffects: number;
+  readonly totalFireEffects: number;
+  readonly totalWaterEffects: number;
+  readonly totalEarthEffects: number;
   readonly byElement: readonly ElementSummary[];
   readonly sampleRuns: readonly SingleRunReport[];
 }
@@ -88,7 +100,7 @@ export function runSingleSimulation(
   policy: AgentPolicyId,
   options: { verifyReplay?: boolean; maxSteps?: number } = {}
 ): SingleRunReport {
-  const maxSteps = options.maxSteps ?? 600;
+  const maxSteps = options.maxSteps ?? 800;
   let state: GameState = createGame(ruleset, seed);
   let steps = 0;
 
@@ -120,6 +132,8 @@ export function runSingleSimulation(
     (sum, p) => sum + p.pendingReaderBonuses.length,
     0
   );
+  const readerBonusesConsumed = state.events.filter((e) => e.type === 'ReaderBonusConsumed').length;
+  const readerBonusesExpired = state.events.filter((e) => e.type === 'ReaderBonusExpired').length;
   const readingsGiven = state.readingHistory.length;
   const adviceFollowed = state.readingHistory.filter((r) => r.adviceFollowed === true).length;
   const deceptiveReadings = state.readingHistory.filter((r) => r.adviceTruthful === false).length;
@@ -132,6 +146,20 @@ export function runSingleSimulation(
   const trialsPassed = state.events.filter((e) => e.type === 'TrialPassed').length;
   const centersAbandoned = state.events.filter((e) => e.type === 'CenterAbandoned').length;
   const abandonedClaimedFree = state.events.filter((e) => e.type === 'AbandonedCardClaimed').length;
+
+  let airEffectsUsed = 0;
+  let fireEffectsUsed = 0;
+  let waterEffectsUsed = 0;
+  let earthEffectsUsed = 0;
+  for (const ev of state.events) {
+    if (ev.type === 'ElementalEffectResolved') {
+      const el = ev.payload?.element;
+      if (el === 'air') airEffectsUsed += 1;
+      else if (el === 'fire') fireEffectsUsed += 1;
+      else if (el === 'water') waterEffectsUsed += 1;
+      else if (el === 'earth') earthEffectsUsed += 1;
+    }
+  }
 
   return {
     seed,
@@ -151,12 +179,18 @@ export function runSingleSimulation(
     adviceFollowed,
     deceptiveReadings,
     readerBonusesGranted,
+    readerBonusesConsumed,
+    readerBonusesExpired,
     readerBonusesWithheldOnAbandon,
     treasuresClaimed,
     barriersReconciled,
     trialsPassed,
     centersAbandoned,
     abandonedClaimedFree,
+    airEffectsUsed,
+    fireEffectsUsed,
+    waterEffectsUsed,
+    earthEffectsUsed,
     finalStateHash: state.stateHash,
     replayVerified,
     invariantOk,
@@ -201,12 +235,18 @@ export function runSimulationBatch(params: {
   let totalAdviceFollowed = 0;
   let totalDeceptive = 0;
   let totalReaderBonuses = 0;
+  let totalReaderBonusesConsumed = 0;
+  let totalReaderBonusesExpired = 0;
   let totalTreasures = 0;
   let totalBarriersPassed = 0;
   let totalTrialsPassed = 0;
   let totalAbandoned = 0;
   let totalAbandonedClaimedFree = 0;
   let totalWithheldOnAbandon = 0;
+  let totalAirEffects = 0;
+  let totalFireEffects = 0;
+  let totalWaterEffects = 0;
+  let totalEarthEffects = 0;
 
   const elementStats: Record<Element, { appearances: number; rankSum: number; wins: number }> = {
     air: { appearances: 0, rankSum: 0, wins: 0 },
@@ -242,12 +282,18 @@ export function runSimulationBatch(params: {
     totalAdviceFollowed += report.adviceFollowed;
     totalDeceptive += report.deceptiveReadings;
     totalReaderBonuses += report.readerBonusesGranted;
+    totalReaderBonusesConsumed += report.readerBonusesConsumed;
+    totalReaderBonusesExpired += report.readerBonusesExpired;
     totalTreasures += report.treasuresClaimed;
     totalBarriersPassed += report.barriersReconciled;
     totalTrialsPassed += report.trialsPassed;
     totalAbandoned += report.centersAbandoned;
     totalAbandonedClaimedFree += report.abandonedClaimedFree;
     totalWithheldOnAbandon += report.readerBonusesWithheldOnAbandon;
+    totalAirEffects += report.airEffectsUsed;
+    totalFireEffects += report.fireEffectsUsed;
+    totalWaterEffects += report.waterEffectsUsed;
+    totalEarthEffects += report.earthEffectsUsed;
 
     for (const pr of report.playerFinalRanks) {
       const bucket = elementStats[pr.primaryElement];
@@ -301,12 +347,18 @@ export function runSimulationBatch(params: {
     adviceFollowPct: totalReadings > 0 ? Number(((totalAdviceFollowed / safeReadings) * 100).toFixed(1)) : 0,
     deceptionPct: totalReadings > 0 ? Number(((totalDeceptive / safeReadings) * 100).toFixed(1)) : 0,
     avgReaderBonuses: Number((totalReaderBonuses / safeRuns).toFixed(2)),
+    totalReaderBonusesConsumed,
+    totalReaderBonusesExpired,
     totalTreasures,
     totalBarriersPassed,
     totalTrialsPassed,
     totalAbandoned,
     totalAbandonedClaimedFree,
     totalWithheldOnAbandon,
+    totalAirEffects,
+    totalFireEffects,
+    totalWaterEffects,
+    totalEarthEffects,
     byElement,
     sampleRuns
   };

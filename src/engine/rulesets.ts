@@ -1,6 +1,6 @@
 import type { Ruleset, RuleStatus } from './types.js';
 
-export const ENGINE_VERSION = '0.3.0-mc';
+export const ENGINE_VERSION = '0.4.0-md1';
 
 const INACTIVE_FUTURE_FEATURES = {
   readings: false,
@@ -26,14 +26,35 @@ const MILESTONE_C_FEATURES = {
   barriersAndTrials: true
 } as const;
 
+const MILESTONE_D1_FEATURES = {
+  ...MILESTONE_C_FEATURES,
+  elementalEffects: true
+} as const;
+
+const BASE_MC_DEFAULTS = {
+  readerBonusPolicy: 'record_only' as const,
+  readerBonusConsumesTurnAction: true,
+  rotateEventOnCenterDiscard: false,
+  elementalNativePrimaryBonusVP: 0,
+  waterResurfaceDestination: 'shuffled' as const
+};
+
+const BASE_D1_DEFAULTS = {
+  readerBonusPolicy: 'free_tier1_elemental_next_turn' as const,
+  readerBonusConsumesTurnAction: true,
+  rotateEventOnCenterDiscard: true,
+  elementalNativePrimaryBonusVP: 0,
+  waterResurfaceDestination: 'shuffled' as const
+};
+
 export const RULESET_PRESETS: Readonly<Record<string, Ruleset>> = {
-  'poker-proto-c': {
-    id: 'poker-proto-c',
-    version: '1.3.0',
-    name: 'Poker Prototype — Milestone C (36 Minors · Full Reading + Event Loop)',
+  'poker-proto-d1': {
+    id: 'poker-proto-d1',
+    version: '1.4.0',
+    name: 'Poker Prototype — Milestone D1 (36 Minors · Full Loop + Elemental Effects)',
     category: 'prototype',
     description:
-      'Integrated 2-player Poker Prototype using all 36 Minor cards (Ace–9, no Courts/Majors yet). Full turn journey: Abandoned Check → Concealed Reading (Good/Bad) → Pursue or Discard → Left Event Reality (Treasure 3 VP / Barrier 2 VP / Trial 1 VP) → Reconciliation or Abandon → Mandatory Chained Evolution.',
+      'Integrated 2-player Poker Prototype with all 36 Minor cards (Ace–9) and complete D1 turn lifecycle: Abandoned Check → Concealed Reading → Pursue/Discard → Left Event Reality (Treasure/Barrier/Trial) → Mandatory Chained Evolution → Elemental Action Window (Air/Fire/Water/Earth consuming hand card → Veil) & provisional usable Reader Bonus.',
     deckProfile: 'classic-36',
     maxMinorRank: 9,
     includeCourts: false,
@@ -47,6 +68,7 @@ export const RULESET_PRESETS: Readonly<Record<string, Ruleset>> = {
     evolutionTieBreak: 'lowest-rank-same-element',
     readingTierHintsEnabled: false,
     readerBonusOnAbandon: false,
+    ...BASE_D1_DEFAULTS,
     trialTargetElement: 'event',
     trialRequireAdvantage: true,
     trialAdvantageBonusVP: 1,
@@ -54,18 +76,18 @@ export const RULESET_PRESETS: Readonly<Record<string, Ruleset>> = {
     declinedAbandonedPolicy: 'send_to_veil',
     marketFrequencyRounds: 0,
     eclipseVictoryCount: 'players-plus-one',
-    l11TargetRank: 0, // Play full Deck of Days to test complete game arc
+    l11TargetRank: 0,
     stopOnTargetRank: false,
     boardOccupancyLimits: { event: 1, center: 1, parallel: 1 },
-    features: MILESTONE_C_FEATURES
+    features: MILESTONE_D1_FEATURES
   },
-  'poker-proto-c-hard': {
-    id: 'poker-proto-c-hard',
-    version: '1.3.0',
-    name: 'Poker Prototype — Hard Evolution (+1 Same Element · 36 Minors)',
+  'poker-proto-d1-hard': {
+    id: 'poker-proto-d1-hard',
+    version: '1.4.0',
+    name: 'Poker Prototype — Milestone D1 Hard (+1 Same Element · Elemental Effects)',
     category: 'prototype',
     description:
-      'Integrated 36-card Poker Prototype with strict same-element +1 mandatory evolution.',
+      'Integrated 36-card Milestone D1 prototype with strict same-element +1 mandatory evolution and full Elemental Action Window.',
     deckProfile: 'classic-36',
     maxMinorRank: 9,
     includeCourts: false,
@@ -79,6 +101,73 @@ export const RULESET_PRESETS: Readonly<Record<string, Ruleset>> = {
     evolutionTieBreak: 'lowest-rank-same-element',
     readingTierHintsEnabled: false,
     readerBonusOnAbandon: false,
+    ...BASE_D1_DEFAULTS,
+    trialTargetElement: 'event',
+    trialRequireAdvantage: true,
+    trialAdvantageBonusVP: 1,
+    sacrificeDestination: 'veil',
+    declinedAbandonedPolicy: 'send_to_veil',
+    marketFrequencyRounds: 0,
+    eclipseVictoryCount: 'players-plus-one',
+    l11TargetRank: 0,
+    stopOnTargetRank: false,
+    boardOccupancyLimits: { event: 1, center: 1, parallel: 1 },
+    features: MILESTONE_D1_FEATURES
+  },
+  'poker-proto-c': {
+    id: 'poker-proto-c',
+    version: '1.3.0',
+    name: 'Poker Prototype — Milestone C Baseline (36 Minors · Reading + Event Loop)',
+    category: 'prototype',
+    description:
+      'Preserved Milestone C baseline (36 Minor cards, Ace–9). Full Reading + Left Event Reality + Abandonment + Mandatory Chained Evolution without Elemental Action Window.',
+    deckProfile: 'classic-36',
+    maxMinorRank: 9,
+    includeCourts: false,
+    playerCount: 2,
+    startingHandSize: 3,
+    maxHandSize: 5,
+    unusedAcesInDeck: false,
+    maxEffectiveVP: 3,
+    allowedEvolutionColors: 'same-color',
+    maxEvolutionJump: 2,
+    evolutionTieBreak: 'lowest-rank-same-element',
+    readingTierHintsEnabled: false,
+    readerBonusOnAbandon: false,
+    ...BASE_MC_DEFAULTS,
+    trialTargetElement: 'event',
+    trialRequireAdvantage: true,
+    trialAdvantageBonusVP: 1,
+    sacrificeDestination: 'veil',
+    declinedAbandonedPolicy: 'send_to_veil',
+    marketFrequencyRounds: 0,
+    eclipseVictoryCount: 'players-plus-one',
+    l11TargetRank: 0,
+    stopOnTargetRank: false,
+    boardOccupancyLimits: { event: 1, center: 1, parallel: 1 },
+    features: MILESTONE_C_FEATURES
+  },
+  'poker-proto-c-hard': {
+    id: 'poker-proto-c-hard',
+    version: '1.3.0',
+    name: 'Poker Prototype — Milestone C Hard (+1 Same Element · 36 Minors)',
+    category: 'prototype',
+    description:
+      'Preserved Milestone C 36-card Poker Prototype with strict same-element +1 mandatory evolution.',
+    deckProfile: 'classic-36',
+    maxMinorRank: 9,
+    includeCourts: false,
+    playerCount: 2,
+    startingHandSize: 3,
+    maxHandSize: 5,
+    unusedAcesInDeck: false,
+    maxEffectiveVP: 3,
+    allowedEvolutionColors: 'same-element',
+    maxEvolutionJump: 1,
+    evolutionTieBreak: 'lowest-rank-same-element',
+    readingTierHintsEnabled: false,
+    readerBonusOnAbandon: false,
+    ...BASE_MC_DEFAULTS,
     trialTargetElement: 'event',
     trialRequireAdvantage: true,
     trialAdvantageBonusVP: 1,
@@ -112,6 +201,7 @@ export const RULESET_PRESETS: Readonly<Record<string, Ruleset>> = {
     evolutionTieBreak: 'lowest-rank-same-element',
     readingTierHintsEnabled: false,
     readerBonusOnAbandon: false,
+    ...BASE_MC_DEFAULTS,
     trialTargetElement: 'event',
     trialRequireAdvantage: true,
     trialAdvantageBonusVP: 1,
@@ -145,6 +235,7 @@ export const RULESET_PRESETS: Readonly<Record<string, Ruleset>> = {
     evolutionTieBreak: 'lowest-rank-same-element',
     readingTierHintsEnabled: false,
     readerBonusOnAbandon: false,
+    ...BASE_MC_DEFAULTS,
     trialTargetElement: 'event',
     trialRequireAdvantage: true,
     trialAdvantageBonusVP: 1,
@@ -178,6 +269,7 @@ export const RULESET_PRESETS: Readonly<Record<string, Ruleset>> = {
     evolutionTieBreak: 'lowest-rank-same-element',
     readingTierHintsEnabled: false,
     readerBonusOnAbandon: false,
+    ...BASE_MC_DEFAULTS,
     trialTargetElement: 'event',
     trialRequireAdvantage: true,
     trialAdvantageBonusVP: 1,
@@ -210,6 +302,7 @@ export const RULESET_PRESETS: Readonly<Record<string, Ruleset>> = {
     evolutionTieBreak: 'lowest-rank-same-element',
     readingTierHintsEnabled: false,
     readerBonusOnAbandon: false,
+    ...BASE_MC_DEFAULTS,
     trialTargetElement: 'event',
     trialRequireAdvantage: true,
     trialAdvantageBonusVP: 1,
@@ -249,6 +342,36 @@ export const RULE_ANNOTATIONS: readonly RuleAnnotation[] = [
     label: 'Mandatory Chained Personal Evolution',
     status: 'agreed',
     note: 'Eligible upward cards advance lineage automatically until exhausted.'
+  },
+  {
+    key: 'elementalActivationCost',
+    label: 'D1 — Elemental Activation Cost (Hand Card → Veil)',
+    status: 'agreed',
+    note: 'Activating Air/Fire/Water/Earth consumes the selected hand card into the Veil atomically, uses its original VP (1–3) with no silent VP+1 scaling, and counts toward the 1-action-per-turn limit.'
+  },
+  {
+    key: 'waterSelfResurface',
+    label: 'D1 — Water Cannot Self-Resurface Same Action',
+    status: 'agreed',
+    note: 'The consumed Water card is ineligible during the same resurfacing action; it becomes eligible on a subsequent separate action.'
+  },
+  {
+    key: 'readerBonusSpending',
+    label: 'D1 — Reader Bonus Spending Mechanism',
+    status: 'provisional',
+    note: 'Separate from hand-card activations. Configurable in Ruleset: record_only (MC) or free_tier1_elemental_next_turn (D1 default, expires if unused on Reader’s next turn).'
+  },
+  {
+    key: 'waterDestination',
+    label: 'D1 — Water Resurface Destination in Days',
+    status: 'provisional',
+    note: 'Configurable in Ruleset: shuffled into Deck of Days (default), placed on top, or placed on bottom.'
+  },
+  {
+    key: 'rotateEventOnDiscard',
+    label: 'D0 — Left Event Rotation on DiscardCenter',
+    status: 'provisional',
+    note: 'Configurable in Ruleset: true in D1 (unused Left Event rotates to Veil at turn cleanup); false in preserved MC baseline.'
   },
   {
     key: 'trialFormula',

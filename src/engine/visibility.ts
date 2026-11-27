@@ -1,3 +1,4 @@
+import { getAvailableReaderBonusesForTurn } from './elemental-effects.js';
 import { eventCardToReality } from './reconciliation.js';
 import type {
   Card,
@@ -36,6 +37,8 @@ export function getLegalActionsForState(state: GameState, viewer: Viewer): Comma
     return [];
   }
 
+  const activePlayer = state.players[state.activePlayerIndex];
+
   switch (state.phase) {
     case 'AWAITING_ABANDONED_CHOICE':
       return ['ClaimAbandonedCard', 'DeclineAbandonedCard'];
@@ -51,6 +54,23 @@ export function getLegalActionsForState(state: GameState, viewer: Viewer): Comma
       return state.board.center.length > 0 ? ['ClaimCenterCard', 'DiscardCenterCard'] : ['EndTurn'];
     case 'AWAITING_HAND_DISCARD':
       return ['DiscardHandCard'];
+    case 'AWAITING_ELEMENTAL_ACTION': {
+      const actions: Command['type'][] = [];
+      if (activePlayer && state.ruleset.features.elementalEffects) {
+        if (!activePlayer.effectUsedThisTurn && activePlayer.hand.length > 0) {
+          actions.push('UseElementalEffect');
+        }
+        const availBonuses = getAvailableReaderBonusesForTurn(activePlayer, state.turn, state.ruleset);
+        const canUseBonus =
+          availBonuses.length > 0 &&
+          (!state.ruleset.readerBonusConsumesTurnAction || !activePlayer.effectUsedThisTurn);
+        if (canUseBonus) {
+          actions.push('UseReaderBonus');
+        }
+      }
+      actions.push('EndTurn');
+      return actions;
+    }
     case 'READY_TO_END_TURN':
       return ['EndTurn'];
     case 'GAME_OVER':
@@ -58,7 +78,7 @@ export function getLegalActionsForState(state: GameState, viewer: Viewer): Comma
   }
 }
 
-function projectEvents(events: readonly GameEvent[], viewer: Viewer): GameEvent[] {
+function projectEvents(events: readonly GameEvent[], viewer: Viewer, rulesetName: string): GameEvent[] {
   if (viewer.role === 'admin') {
     return [...events];
   }
@@ -66,6 +86,18 @@ function projectEvents(events: readonly GameEvent[], viewer: Viewer): GameEvent[
   const out: GameEvent[] = [];
   for (const ev of events) {
     if (ev.visibility === 'admin_only') continue;
+    if (ev.type === 'GameCreated') {
+      // D0 Finding E: Strip deterministic seed from player event logs
+      out.push({
+        ...ev,
+        summary: `Started ${rulesetName} (v${ev.rulesetVersion}).`,
+        payload: {
+          rulesetId: ev.payload?.rulesetId ?? null,
+          rulesetVersion: ev.rulesetVersion
+        }
+      });
+      continue;
+    }
     if (ev.visibility === 'private_to_actor' && ev.actor !== viewer.playerId) {
       out.push({
         ...ev,
@@ -151,7 +183,8 @@ function buildDeckComponents(
 
 /**
  * Produces a strictly masked view for a specific player or full God Mode for admin.
- * Guarantees concealed Center, concealed Left Event, private opponent hands, and Days order never leak.
+ * Guarantees deterministic seed, concealed Center, concealed Left Event, private opponent hands,
+ * and Days order never leak to unauthorized players.
  */
 export function projectView(state: GameState, viewer: Viewer): ProjectedGameView {
   const isAdmin = viewer.role === 'admin';
@@ -229,6 +262,7 @@ export function projectView(state: GameState, viewer: Viewer): ProjectedGameView
     const canSeeHand = isAdmin || (viewer.role === 'player' && viewer.playerId === p.id);
     const topLineageId = p.lineage.cardIds[p.lineage.cardIds.length - 1]!;
     const topCard = state.cards[topLineageId]!;
+    const availableCount = getAvailableReaderBonusesForTurn(p, state.turn, state.ruleset).length;
 
     return {
       id: p.id,
@@ -245,7 +279,11 @@ export function projectView(state: GameState, viewer: Viewer): ProjectedGameView
       handCount: p.hand.length,
       hand: canSeeHand ? mapCardIds(p.hand, state.cards) : null,
       eclipseCount: p.eclipseCount,
-      pendingReaderBonusCount: p.pendingReaderBonuses.length,
+      effectUsedThisTurn: p.effectUsedThisTurn,
+      pendingReaderBonusCount: p.pendingReaderBonuses.filter(
+        (b) => b.status === 'pending_spec' || b.status === 'available'
+      ).length,
+      availableReaderBonusCount: availableCount,
       pendingReaderBonuses: [...p.pendingReaderBonuses],
       evolutionsCompleted: p.evolutionsCompleted,
       maxChainLength: p.maxChainLength,
@@ -259,7 +297,7 @@ export function projectView(state: GameState, viewer: Viewer): ProjectedGameView
     viewer,
     engineVersion: state.engineVersion,
     ruleset: state.ruleset,
-    seed: state.seed,
+    seed: isAdmin ? state.seed : null,
     phase: state.phase,
     round: state.round,
     turn: state.turn,
@@ -288,7 +326,7 @@ export function projectView(state: GameState, viewer: Viewer): ProjectedGameView
     players,
     deckComponents: buildDeckComponents(state, viewer, canInspectCenter),
     legalActions: getLegalActionsForState(state, viewer),
-    events: projectEvents(state.events, viewer),
+    events: projectEvents(state.events, viewer, state.ruleset.name),
     commandCount: state.commandHistory.length
   };
 }
@@ -299,7 +337,7 @@ export interface ExportBundle {
   readonly viewerPlayerId?: string;
   readonly exportedAt: string;
   readonly engineVersion: string;
-  readonly seed: string;
+  readonly seed: string | null;
   readonly ruleset: GameState['ruleset'];
   readonly finalStateHash: string;
   readonly commands?: readonly Command[];
@@ -334,7 +372,7 @@ export function buildExportBundle(
     viewerPlayerId: viewer.playerId,
     exportedAt,
     engineVersion: state.engineVersion,
-    seed: state.seed,
+    seed: null,
     ruleset: state.ruleset,
     finalStateHash: state.stateHash,
     events: view.events,

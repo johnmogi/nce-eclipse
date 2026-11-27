@@ -13,7 +13,7 @@ export function formatEventsAsText(view: ProjectedGameView): string {
   const lines: string[] = [
     `NEXUS CENTRAL ENGINE — EVENT LOG`,
     `Engine: ${view.engineVersion} | Ruleset: ${view.ruleset.id} v${view.ruleset.version}`,
-    `Seed: ${view.seed} | Scope: ${scope}`,
+    `Seed: ${view.seed ?? '[redacted]'} | Scope: ${scope}`,
     `Status: ${view.status} | Round ${view.round}, Turn ${view.turn} | Phase: ${view.phase}`,
     `State Hash: ${view.stateHash}`,
     '------------------------------------------------------------'

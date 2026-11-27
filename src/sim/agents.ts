@@ -1,7 +1,20 @@
+import {
+  computeElementalStrength,
+  getAvailableReaderBonusesForTurn
+} from '../engine/elemental-effects.js';
 import { isEligibleEvolution } from '../engine/evolution.js';
+import { isCardObjectivelyHelpful } from '../engine/readings.js';
 import { evaluateReconciliation, eventCardToReality } from '../engine/reconciliation.js';
-import { isCardObjectivelyHelpful } from '../engine/reducer.js';
-import type { Card, Command, GameState, PlayerState, ReadingAdvice, Ruleset } from '../engine/types.js';
+import type {
+  Card,
+  Command,
+  Element,
+  ElementalEffectPayload,
+  GameState,
+  PlayerState,
+  ReadingAdvice,
+  Ruleset
+} from '../engine/types.js';
 
 export type AgentPolicyId =
   | 'bluffing-rival'
@@ -46,7 +59,6 @@ function findCheapestLegalSacrifice(
   eventCard: Card,
   centerCard: Card
 ): string[] | null {
-  // Try 0 cards first
   const zero = evaluateReconciliation({
     player,
     eventCard,
@@ -57,7 +69,6 @@ function findCheapestLegalSacrifice(
   });
   if (zero.passes) return [];
 
-  // Rank hand cards from least valuable to keep -> most valuable to keep
   const sortedHand = [...player.hand].sort((a, b) => {
     const ca = state.cards[a]!;
     const cb = state.cards[b]!;
@@ -68,7 +79,6 @@ function findCheapestLegalSacrifice(
     return a.localeCompare(b);
   });
 
-  // Try 1-card sacrifices
   for (const id of sortedHand) {
     const check = evaluateReconciliation({
       player,
@@ -81,7 +91,6 @@ function findCheapestLegalSacrifice(
     if (check.passes) return [id];
   }
 
-  // Try 2-card sacrifices
   for (let i = 0; i < sortedHand.length; i++) {
     for (let j = i + 1; j < sortedHand.length; j++) {
       const pair = [sortedHand[i]!, sortedHand[j]!];
@@ -98,6 +107,120 @@ function findCheapestLegalSacrifice(
   }
 
   return null;
+}
+
+function buildElementalPayloadForAgent(
+  state: GameState,
+  player: PlayerState,
+  element: Element,
+  strength: number
+): ElementalEffectPayload | null {
+  if (element === 'water') {
+    if (state.veil.length === 0) return null;
+    const rankedVeil = [...state.veil].sort((a, b) => {
+      const ca = state.cards[a]!;
+      const cb = state.cards[b]!;
+      const scoreA = cardMatchesFutureLineage(player, ca, state.ruleset) ? 10 : 0;
+      const scoreB = cardMatchesFutureLineage(player, cb, state.ruleset) ? 10 : 0;
+      if (scoreA !== scoreB) return scoreB - scoreA;
+      return b.localeCompare(a);
+    });
+    const selected = rankedVeil.slice(0, Math.min(strength, rankedVeil.length));
+    return { targetZone: 'veil', targetCardIds: selected };
+  }
+
+  if (element === 'fire') {
+    if (state.centerAbandoned && state.board.center.length > 0) {
+      return { targetZone: 'board', targetBoardSlots: ['center'] };
+    }
+    if (state.days.length >= 4) {
+      const count = Math.min(strength, state.days.length - 2);
+      if (count >= 1) return { targetZone: 'days', daysCount: count };
+    }
+    return null;
+  }
+
+  if (element === 'air') {
+    if (state.centerAbandoned && state.board.center.length > 0) {
+      return { targetZone: 'board', targetBoardSlots: ['center'] };
+    }
+    if (state.days.length >= 2) {
+      const count = Math.min(strength, state.days.length);
+      return { targetZone: 'days', daysCount: count };
+    }
+    return null;
+  }
+
+  // Earth
+  if (strength >= 2 && state.days.length >= 2) {
+    const count = Math.min(strength, state.days.length);
+    const indexOrder = count === 3 ? [1, 2, 0] : [1, 0];
+    return { targetZone: 'days', indexOrder };
+  }
+  if (state.days.length >= 2) {
+    return { targetZone: 'days', daysCount: 1, placement: 'bottom' };
+  }
+  return null;
+}
+
+function chooseElementalAction(state: GameState, player: PlayerState): Command {
+  const playerId = player.id;
+
+  // 1. Spend an available provisional Reader Bonus if useful (costs 0 hand cards!)
+  const bonuses = getAvailableReaderBonusesForTurn(player, state.turn, state.ruleset);
+  if (
+    bonuses.length > 0 &&
+    (!state.ruleset.readerBonusConsumesTurnAction || !player.effectUsedThisTurn)
+  ) {
+    for (const bonus of bonuses) {
+      if (!bonus.sourceElement) continue;
+      const payload = buildElementalPayloadForAgent(state, player, bonus.sourceElement, 1);
+      if (payload) {
+        return {
+          type: 'UseReaderBonus',
+          playerId,
+          bonusId: bonus.id,
+          ...payload
+        };
+      }
+    }
+  }
+
+  // 2. Otherwise consider activating a physical hand card (consumes card -> Veil)
+  if (!player.effectUsedThisTurn && player.hand.length >= 2) {
+    // Prefer spending cards that do NOT advance our own future lineage
+    const candidates = player.hand
+      .map((id) => ({ id, card: state.cards[id]! }))
+      .filter(({ card }) => Boolean(card.element))
+      .sort((a, b) => {
+        const keepA = cardMatchesFutureLineage(player, a.card, state.ruleset) ? 1 : 0;
+        const keepB = cardMatchesFutureLineage(player, b.card, state.ruleset) ? 1 : 0;
+        if (keepA !== keepB) return keepA - keepB;
+        return a.card.vp - b.card.vp || a.id.localeCompare(b.id);
+      });
+
+    for (const { id, card } of candidates) {
+      const keep = cardMatchesFutureLineage(player, card, state.ruleset);
+      // Don't burn a future evolution card unless hand is full
+      if (keep && player.hand.length < state.ruleset.maxHandSize) continue;
+      const element = card.element!;
+      // Exercise Water preferentially when Veil has a helpful card; otherwise allow tactical plays
+      if (element === 'water' && state.veil.length === 0) continue;
+      const { strength } = computeElementalStrength(player, card, state.ruleset);
+      const payload = buildElementalPayloadForAgent(state, player, element, strength);
+      if (payload) {
+        return {
+          type: 'UseElementalEffect',
+          playerId,
+          element,
+          sourceCardId: id,
+          ...payload
+        };
+      }
+    }
+  }
+
+  return { type: 'EndTurn', playerId };
 }
 
 export function chooseReaderAdvice(state: GameState, policy: AgentPolicyId): ReadingAdvice {
@@ -126,7 +249,7 @@ export function chooseReaderAdvice(state: GameState, policy: AgentPolicyId): Rea
 }
 
 /**
- * Deterministic policy selecting the next legal command for Milestones A + B + C.
+ * Deterministic policy selecting the next legal command for Milestones A + B + C + D1.
  */
 export function chooseNextCommand(state: GameState, policy: AgentPolicyId): Command | null {
   if (state.status !== 'playing') return null;
@@ -205,12 +328,10 @@ export function chooseNextCommand(state: GameState, policy: AgentPolicyId): Comm
     const evolvesNow = isEligibleEvolution(player.lineage, centerCard, state.ruleset);
     const futureUseful = cardMatchesFutureLineage(player, centerCard, state.ruleset);
 
-    // If free (0 sacrifice) or card helps our lineage or always-claim -> reconcile!
     if (sac.length === 0 || evolvesNow || futureUseful || policy === 'always-claim') {
       return { type: 'ResolveEvent', playerId, sacrificeCardIds: sac };
     }
 
-    // Otherwise don't waste a hand card on a dead Center card -> abandon!
     return { type: 'AbandonCenter', playerId };
   }
 
@@ -220,6 +341,10 @@ export function chooseNextCommand(state: GameState, policy: AgentPolicyId): Comm
       playerId,
       cardId: chooseWorstHandCardToDiscard(state, player)
     };
+  }
+
+  if (state.phase === 'AWAITING_ELEMENTAL_ACTION') {
+    return chooseElementalAction(state, player);
   }
 
   if (state.phase === 'READY_TO_END_TURN') {

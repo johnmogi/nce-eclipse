@@ -17,6 +17,11 @@ export type Zone =
   | 'champion'
   | 'reserve';
 
+export type ElementalTargetZone = 'days' | 'board' | 'board_and_days' | 'veil';
+export type BoardTargetSlot = 'event' | 'center';
+export type WaterResurfaceDestination = 'shuffled' | 'top' | 'bottom';
+export type ReaderBonusPolicy = 'record_only' | 'free_tier1_elemental_next_turn';
+
 export type EvolutionColorPolicy = 'same-color' | 'same-element' | 'any';
 export type EvolutionTieBreakPolicy =
   | 'lowest-rank-same-element'
@@ -30,6 +35,7 @@ export type GamePhase =
   | 'AWAITING_EVENT_RESOLUTION'
   | 'AWAITING_CENTER_DECISION'
   | 'AWAITING_HAND_DISCARD'
+  | 'AWAITING_ELEMENTAL_ACTION'
   | 'READY_TO_END_TURN'
   | 'GAME_OVER';
 
@@ -92,6 +98,11 @@ export interface Ruleset {
   readonly evolutionTieBreak: EvolutionTieBreakPolicy;
   readonly readingTierHintsEnabled: boolean; // Canonical v0.2 default: false
   readonly readerBonusOnAbandon: boolean; // Creator ruling: false (GOOD requires claim; BAD+DISCARD grants)
+  readonly readerBonusPolicy: ReaderBonusPolicy; // Provisional in D1: record_only (MC) | free_tier1_elemental_next_turn (D1)
+  readonly readerBonusConsumesTurnAction: boolean; // Provisional: true (1 elemental action budget per turn)
+  readonly rotateEventOnCenterDiscard: boolean; // Provisional: false (MC baseline) | true (D1 cleanup rotation)
+  readonly elementalNativePrimaryBonusVP: number; // Provisional: 0 (uses exact card VP 1/2/3 by default)
+  readonly waterResurfaceDestination: WaterResurfaceDestination; // Provisional: 'shuffled' | 'top' | 'bottom'
   readonly trialTargetElement: 'event' | 'center'; // Provisional default: 'event' (Left Event defines obstacle)
   readonly trialRequireAdvantage: boolean; // Provisional default: true
   readonly trialAdvantageBonusVP: number; // Provisional default: 1 (applied once, subject to maxEffectiveVP cap)
@@ -112,6 +123,8 @@ export interface LineageState {
   readonly cardIds: readonly string[];
 }
 
+export type ReaderBonusStatus = 'pending_spec' | 'available' | 'consumed' | 'expired';
+
 export interface PendingReaderBonus {
   readonly id: string;
   readonly earnedOnTurn: number;
@@ -119,7 +132,9 @@ export interface PendingReaderBonus {
   readonly sourceCardId: string;
   readonly sourceElement?: Element;
   readonly trigger: 'good_claimed' | 'bad_discarded' | 'good_abandoned';
-  readonly status: 'pending_spec';
+  readonly status: ReaderBonusStatus;
+  readonly consumedOnTurn?: number;
+  readonly expiredOnTurn?: number;
 }
 
 export interface PlayerState {
@@ -131,7 +146,7 @@ export interface PlayerState {
   readonly championCardId?: string;
   readonly eclipseCount: number;
   readonly effectUsedThisTurn: boolean;
-  readonly secondaryElement?: Element; // Reserved, inactive in v0.2
+  readonly secondaryElement?: Element; // Reserved, inactive in D1
   readonly pendingReaderBonuses: readonly PendingReaderBonus[];
   readonly evolutionsCompleted: number;
   readonly maxChainLength: number;
@@ -226,6 +241,10 @@ export type GameEventType =
   | 'AbandonedCardDeclined'
   | 'ReaderRewardGranted'
   | 'ReaderRewardWithheld'
+  | 'ReaderBonusConsumed'
+  | 'ReaderBonusExpired'
+  | 'ElementalEffectActivated'
+  | 'ElementalEffectResolved'
   | 'CenterClaimed'
   | 'LineageEvolved'
   | 'EvolutionChainCompleted'
@@ -267,10 +286,29 @@ export interface ValidationError {
     | 'CANNOT_ABANDON_TREASURE'
     | 'UNEXPECTED_SACRIFICE'
     | 'HAND_LIMIT_EXCEEDED'
+    | 'EFFECT_ALREADY_USED_THIS_TURN'
+    | 'ELEMENT_MISMATCH'
+    | 'INVALID_TARGET_ZONE'
+    | 'INVALID_TARGET_SELECTION'
+    | 'INSUFFICIENT_TARGET_CARDS'
+    | 'WATER_SELF_RESURFACE_FORBIDDEN'
+    | 'INVALID_REORDER_SPEC'
+    | 'NO_AVAILABLE_READER_BONUS'
+    | 'READER_BONUS_NOT_READY'
     | 'FEATURE_DISABLED'
     | 'INVARIANT_VIOLATION';
   readonly message: string;
   readonly details?: Readonly<Record<string, unknown>>;
+}
+
+export interface ElementalEffectPayload {
+  readonly targetZone: ElementalTargetZone;
+  readonly targetCardIds?: readonly string[];
+  readonly targetBoardSlots?: readonly BoardTargetSlot[];
+  readonly daysCount?: number;
+  readonly newOrder?: readonly string[];
+  readonly indexOrder?: readonly number[];
+  readonly placement?: 'top' | 'bottom';
 }
 
 export type Command =
@@ -288,8 +326,19 @@ export type Command =
   // Hand & turn management
   | { readonly type: 'DiscardHandCard'; readonly playerId: string; readonly cardId: string }
   | { readonly type: 'EndTurn'; readonly playerId: string }
+  // Milestone D1: Elemental hand effects (AGREED cost: consumes hand card -> Veil) & provisional Reader Bonus
+  | ({
+      readonly type: 'UseElementalEffect';
+      readonly playerId: string;
+      readonly element: Element;
+      readonly sourceCardId: string;
+    } & ElementalEffectPayload)
+  | ({
+      readonly type: 'UseReaderBonus';
+      readonly playerId: string;
+      readonly bonusId: string;
+    } & ElementalEffectPayload)
   // Reserved future commands (validated cleanly as FEATURE_DISABLED until their milestone)
-  | { readonly type: 'UseElementalEffect'; readonly playerId: string; readonly cardId: string }
   | { readonly type: 'ProposeTrade'; readonly playerId: string; readonly targetPlayerId: string }
   | { readonly type: 'AcceptTrade'; readonly playerId: string; readonly offerId: string }
   | { readonly type: 'ChooseMajorExit'; readonly playerId: string; readonly cardId: string }
@@ -337,6 +386,7 @@ export interface GameState {
   readonly centerRevealed: boolean;
   readonly centerAbandoned: boolean;
   readonly abandonedByPlayerId: string | null;
+  readonly discardedCenterThisTurn: boolean;
   readonly currentReading: ReadingRecord | null;
   readonly readingHistory: readonly ReadingRecord[];
   readonly majorPending: readonly MajorPendingEntry[];
@@ -405,7 +455,9 @@ export interface ProjectedPlayerView {
   readonly handCount: number;
   readonly hand: readonly Card[] | null;
   readonly eclipseCount: number;
+  readonly effectUsedThisTurn: boolean;
   readonly pendingReaderBonusCount: number;
+  readonly availableReaderBonusCount: number;
   readonly pendingReaderBonuses: readonly PendingReaderBonus[];
   readonly evolutionsCompleted: number;
   readonly maxChainLength: number;
@@ -423,7 +475,7 @@ export interface ProjectedGameView {
   readonly viewer: Viewer;
   readonly engineVersion: string;
   readonly ruleset: Ruleset;
-  readonly seed: string;
+  readonly seed: string | null; // Masked to null for player views; populated only for Admin
   readonly phase: GamePhase;
   readonly round: number;
   readonly turn: number;
@@ -459,10 +511,10 @@ export interface ProjectedGameView {
 export interface CreateGameOptions {
   readonly playerNames?: readonly string[];
   readonly startingElements?: readonly Element[];
-  /**
-   * Optional deterministic card-order overrides for worked tabletop acceptance tests (S1–S6).
-   * Every listed card must exist in the ruleset's catalog and not duplicate starting Aces.
-   */
+  /** Deterministic override for scenario tests: explicit starting hands per player index */
   readonly overrideHands?: readonly (readonly string[])[];
+  /** Deterministic override for scenario tests: cards placed at the top of Days (index 0 drawn first) */
   readonly overrideDaysTop?: readonly string[];
+  /** Deterministic override for scenario tests: cards pre-placed into the public Veil */
+  readonly overrideVeil?: readonly string[];
 }

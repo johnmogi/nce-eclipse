@@ -32,6 +32,7 @@ export function computeStateHash(state: Omit<GameState, 'stateHash'>): string {
     centerRevealed: state.centerRevealed,
     centerAbandoned: state.centerAbandoned,
     abandonedByPlayerId: state.abandonedByPlayerId,
+    discardedCenterThisTurn: state.discardedCenterThisTurn,
     currentReading: state.currentReading,
     readingHistory: state.readingHistory,
     majorPending: state.majorPending,

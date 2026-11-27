@@ -12,7 +12,8 @@ export interface InvariantReport {
  * 2. Board slot occupancy limits enforced per ruleset.
  * 3. Every player's lineage stack is non-empty, strictly ascending, and matches top card.
  * 4. Active player index/ID consistency.
- * 5. State hash integrity.
+ * 5. Phase-specific invariants (readings, abandonment, event resolution, elemental window).
+ * 6. State hash integrity.
  */
 export function checkInvariants(state: GameState): InvariantReport {
   const violations: string[] = [];
@@ -128,6 +129,15 @@ export function checkInvariants(state: GameState): InvariantReport {
     }
     if (state.board.event.length > 0 && !state.eventRevealed) {
       violations.push('AWAITING_EVENT_RESOLUTION requires Left Event card to be revealed');
+    }
+  }
+
+  if (state.phase === 'AWAITING_ELEMENTAL_ACTION') {
+    if (!state.ruleset.features.elementalEffects) {
+      violations.push('AWAITING_ELEMENTAL_ACTION is invalid when features.elementalEffects is false');
+    }
+    if (activePlayer && activePlayer.hand.length > state.ruleset.maxHandSize) {
+      violations.push('Cannot enter AWAITING_ELEMENTAL_ACTION while hand exceeds maxHandSize');
     }
   }
 

@@ -1,29 +1,43 @@
-import { buildCardCatalog, ELEMENTS } from './cards.js';
-import { isEligibleEvolution, resolveMandatoryEvolutionChain } from './evolution.js';
+import {
+  expireUnusedReaderBonuses,
+  getAvailableReaderBonusesForTurn,
+  validateAndExecuteElementalEffect,
+  validateAndExecuteReaderBonus,
+  type ElementalMutableContext
+} from './elemental-effects.js';
+import {
+  applyEvolutionWithEvents,
+  evaluateCompletion,
+  fail,
+  finalizeState,
+  makeEvent
+} from './event-helpers.js';
 import { computeStateHash } from './hash.js';
-import { assertInvariants } from './invariants.js';
+import {
+  computeReadingHints,
+  createReadingForTurn,
+  finalizeReadingReward,
+  isCardObjectivelyHelpful
+} from './readings.js';
 import { evaluateReconciliation, eventCardToReality } from './reconciliation.js';
-import { deterministicShuffle, seedToUint32 } from './rng.js';
-import { ENGINE_VERSION } from './rulesets.js';
+import { createGame } from './setup.js';
 import type {
   Card,
   Command,
   CommandRecord,
   CreateGameOptions,
   DispatchResult,
-  Element,
-  EventVisibility,
   GameEvent,
-  GameEventType,
   GameOutcome,
   GamePhase,
   GameState,
   PlayerState,
-  ReadingHints,
   ReadingRecord,
   Ruleset,
   ValidationError
 } from './types.js';
+
+export { createGame, isCardObjectivelyHelpful };
 
 const FUTURE_FEATURE_COMMANDS: Readonly<
   Record<string, { flag: keyof Ruleset['features']; label: string }>
@@ -35,558 +49,16 @@ const FUTURE_FEATURE_COMMANDS: Readonly<
   AbandonCenter: { flag: 'barriersAndTrials', label: 'Event Realities (Milestone C / Level 1.3)' },
   ClaimAbandonedCard: { flag: 'barriersAndTrials', label: 'Event Realities (Milestone C / Level 1.3)' },
   DeclineAbandonedCard: { flag: 'barriersAndTrials', label: 'Event Realities (Milestone C / Level 1.3)' },
-  UseElementalEffect: { flag: 'elementalEffects', label: 'Elemental Hand Effects (Milestone D)' },
-  ProposeTrade: { flag: 'tradingMarket', label: 'Trading Market (Milestone D)' },
-  AcceptTrade: { flag: 'tradingMarket', label: 'Trading Market (Milestone D)' },
+  UseElementalEffect: { flag: 'elementalEffects', label: 'Elemental Hand Effects (Milestone D1)' },
+  UseReaderBonus: { flag: 'elementalEffects', label: 'Reader Bonus Elemental Action (Milestone D1)' },
+  ProposeTrade: { flag: 'tradingMarket', label: 'Trading Market (Milestone D2)' },
+  AcceptTrade: { flag: 'tradingMarket', label: 'Trading Market (Milestone D2)' },
   ChooseMajorExit: { flag: 'majors', label: 'Major Arcana Contention (Milestone E)' },
   ResolveEntropy: { flag: 'moonSunCycle', label: 'Moon/Sun Entropy Cycle (Milestone F)' }
 };
 
-function makeEvent(
-  seq: number,
-  turn: number,
-  round: number,
-  phase: GamePhase,
-  rulesetVersion: string,
-  params: {
-    actor: string;
-    type: GameEventType;
-    affectedCardIds: readonly string[];
-    source: string;
-    reason: string;
-    visibility: EventVisibility;
-    summary: string;
-    payload?: Readonly<Record<string, unknown>>;
-  }
-): GameEvent {
-  return {
-    seq,
-    turn,
-    round,
-    phase,
-    rulesetVersion,
-    ...params
-  };
-}
-
-function finalizeState(draft: Omit<GameState, 'stateHash'>): GameState {
-  const stateHash = computeStateHash(draft);
-  const fullState: GameState = { ...draft, stateHash };
-  assertInvariants(fullState);
-  return fullState;
-}
-
-function fail(state: GameState, command: Command, error: ValidationError): DispatchResult {
-  const nextSeq = state.events.length + 1;
-  const rejectionEvent = makeEvent(
-    nextSeq,
-    state.turn,
-    state.round,
-    state.phase,
-    state.ruleset.version,
-    {
-      actor: command.playerId,
-      type: 'CommandRejected',
-      affectedCardIds: [],
-      source: command.type,
-      reason: error.code,
-      visibility: 'public',
-      summary: `Rejected ${command.type} by ${command.playerId}: ${error.message}`,
-      payload: { code: error.code, details: error.details ?? null }
-    }
-  );
-
-  const nextState: GameState = {
-    ...state,
-    rejectedCommands: [...state.rejectedCommands, { atTurn: state.turn, command, error }],
-    events: [...state.events, rejectionEvent]
-  };
-
-  return { ok: false, state: nextState, error };
-}
-
-export function isCardObjectivelyHelpful(
-  recipient: PlayerState,
-  card: Card,
-  ruleset: Ruleset
-): boolean {
-  if (isEligibleEvolution(recipient.lineage, card, ruleset)) return true;
-  if (card.family !== 'classic-number' || !card.color || !card.element) return false;
-  if (card.rank <= recipient.lineage.rank) return false;
-  if (ruleset.allowedEvolutionColors === 'same-element') {
-    return card.element === recipient.lineage.element;
-  }
-  if (ruleset.allowedEvolutionColors === 'same-color') {
-    return card.color === recipient.lineage.color;
-  }
-  return true;
-}
-
-function computeReadingHints(
-  recipient: PlayerState,
-  centerCard: Card,
-  ruleset: Ruleset
-): ReadingHints | null {
-  if (!ruleset.readingTierHintsEnabled) return null;
-  if (recipient.lineage.rank <= 3) return null;
-  if (recipient.lineage.rank <= 6) {
-    return { color: centerCard.color };
-  }
-  return { color: centerCard.color, tier: centerCard.tier };
-}
-
-function createReadingForTurn(
-  players: readonly PlayerState[],
-  activePlayerIndex: number,
-  centerCard: Card,
-  turn: number,
-  round: number,
-  ruleset: Ruleset
-): ReadingRecord {
-  const recipient = players[activePlayerIndex]!;
-  const reader = players[(activePlayerIndex + 1) % players.length]!;
-  return {
-    turn,
-    round,
-    readerId: reader.id,
-    recipientId: recipient.id,
-    centerCardId: centerCard.id,
-    advice: null,
-    hints: null,
-    playerAction: null,
-    adviceFollowed: null,
-    objectiveHelpful: isCardObjectivelyHelpful(recipient, centerCard, ruleset),
-    adviceTruthful: null,
-    resolution: 'pending',
-    readerReward: 'pending',
-    readerRewardReason: null
-  };
-}
-
-function evaluateCompletion(
-  players: readonly PlayerState[],
-  days: readonly string[],
-  center: readonly string[],
-  ruleset: Ruleset
-): GameOutcome | undefined {
-  if (ruleset.stopOnTargetRank && ruleset.l11TargetRank > 0) {
-    const reached = players.filter((p) => p.lineage.rank >= ruleset.l11TargetRank);
-    if (reached.length > 0) {
-      const highestRank = Math.max(...players.map((p) => p.lineage.rank));
-      const winners = players.filter((p) => p.lineage.rank === highestRank).map((p) => p.id);
-      return {
-        reason: 'target_rank_reached',
-        winnerIds: winners,
-        highestRank,
-        summary: `Target rank ${ruleset.l11TargetRank} reached by ${winners.join(', ')}.`
-      };
-    }
-  }
-
-  if (days.length === 0 && center.length === 0) {
-    const highestRank = Math.max(...players.map((p) => p.lineage.rank));
-    const winners = players.filter((p) => p.lineage.rank === highestRank).map((p) => p.id);
-    return {
-      reason: 'days_exhausted',
-      winnerIds: winners,
-      highestRank,
-      summary: `Deck of Days exhausted. Winner of the day (Rank ${highestRank}): ${winners.join(', ')}.`
-    };
-  }
-
-  return undefined;
-}
-
-function applyEvolutionWithEvents(
-  player: PlayerState,
-  cards: Readonly<Record<string, Card>>,
-  ruleset: Ruleset,
-  context: {
-    turn: number;
-    round: number;
-    phase: GamePhase;
-    source: string;
-    nextSeq: () => number;
-  }
-): { player: PlayerState; events: GameEvent[] } {
-  const res = resolveMandatoryEvolutionChain(player, cards, ruleset);
-  if (res.steps.length === 0) {
-    return { player, events: [] };
-  }
-
-  const events: GameEvent[] = [];
-  for (const step of res.steps) {
-    events.push(
-      makeEvent(context.nextSeq(), context.turn, context.round, context.phase, ruleset.version, {
-        actor: player.id,
-        type: 'LineageEvolved',
-        affectedCardIds: [step.toCard.id],
-        source: context.source,
-        reason: step.matchReason,
-        visibility: 'public',
-        summary: `${player.name}: ${step.fromCard.label} evolves to ${step.toCard.label} (${step.matchReason}).`,
-        payload: {
-          fromCardId: step.fromCard.id,
-          toCardId: step.toCard.id,
-          fromRank: step.fromCard.rank,
-          toRank: step.toCard.rank,
-          rankDelta: step.rankDelta,
-          tieBreakPolicy: ruleset.evolutionTieBreak,
-          tieBreakApplied: step.tieBreakApplied,
-          competingCandidateIds: step.competingCandidateIds
-        }
-      })
-    );
-  }
-
-  if (res.steps.length > 1) {
-    events.push(
-      makeEvent(context.nextSeq(), context.turn, context.round, context.phase, ruleset.version, {
-        actor: player.id,
-        type: 'EvolutionChainCompleted',
-        affectedCardIds: res.steps.map((s) => s.toCard.id),
-        source: context.source,
-        reason: 'mandatory-chain',
-        visibility: 'public',
-        summary: `${player.name} completed a ${res.steps.length}-step evolution chain up to Rank ${res.player.lineage.rank} (${cards[res.player.lineage.cardIds[res.player.lineage.cardIds.length - 1]!]!.label}).`,
-        payload: {
-          chainLength: res.steps.length,
-          finalRank: res.player.lineage.rank
-        }
-      })
-    );
-  }
-
-  return { player: res.player, events };
-}
-
 /**
- * Pure deterministic game initializer.
- * Supports optional deterministic card-placement overrides for worked GDD acceptance scenarios (S1–S6).
- */
-export function createGame(
-  ruleset: Ruleset,
-  seed: string,
-  options: CreateGameOptions = {}
-): GameState {
-  if (ruleset.playerCount < 2 || ruleset.playerCount > 4) {
-    throw new Error(`Unsupported playerCount ${ruleset.playerCount}; expected 2..4`);
-  }
-
-  const catalog = buildCardCatalog(ruleset);
-  const allCardIds = Object.keys(catalog).sort();
-  let rngState = seedToUint32(`${ruleset.id}:${ruleset.version}:${seed}`);
-
-  const chosenElements: Element[] = options.startingElements
-    ? [...options.startingElements]
-    : [...ELEMENTS.slice(0, ruleset.playerCount)];
-
-  if (chosenElements.length !== ruleset.playerCount) {
-    throw new Error(`startingElements length must equal ruleset.playerCount (${ruleset.playerCount})`);
-  }
-  if (new Set(chosenElements).size !== chosenElements.length) {
-    throw new Error('Starting elements must be distinct per player');
-  }
-
-  const assignedAceIds = new Set<string>();
-  const players: PlayerState[] = [];
-
-  for (let i = 0; i < ruleset.playerCount; i++) {
-    const element = chosenElements[i]!;
-    const aceId = `classic-${element}-01`;
-    const aceCard = catalog[aceId];
-    if (!aceCard || !aceCard.color) {
-      throw new Error(`Missing starting Ace "${aceId}" in card catalog`);
-    }
-    assignedAceIds.add(aceId);
-    const id = `p${i + 1}`;
-    const name = options.playerNames?.[i] ?? `Player ${i + 1}`;
-    players.push({
-      id,
-      name,
-      primaryElement: element,
-      lineage: {
-        rank: 1,
-        element,
-        color: aceCard.color,
-        cardIds: [aceId]
-      },
-      hand: [],
-      eclipseCount: 0,
-      effectUsedThisTurn: false,
-      pendingReaderBonuses: [],
-      evolutionsCompleted: 0,
-      maxChainLength: 0,
-      turnsTaken: 0
-    });
-  }
-
-  // Reserve and overridden cards handling
-  const overriddenSet = new Set<string>();
-  if (options.overrideHands) {
-    for (const hand of options.overrideHands) {
-      for (const id of hand) {
-        if (!catalog[id]) throw new Error(`Unknown override hand card "${id}"`);
-        if (assignedAceIds.has(id) || overriddenSet.has(id)) {
-          throw new Error(`Duplicate override card "${id}"`);
-        }
-        overriddenSet.add(id);
-      }
-    }
-  }
-  if (options.overrideDaysTop) {
-    for (const id of options.overrideDaysTop) {
-      if (!catalog[id]) throw new Error(`Unknown override Days card "${id}"`);
-      if (assignedAceIds.has(id) || overriddenSet.has(id)) {
-        throw new Error(`Duplicate override card "${id}"`);
-      }
-      overriddenSet.add(id);
-    }
-  }
-
-  const reserve: string[] = [];
-  const poolToShuffle: string[] = [];
-
-  for (const id of allCardIds) {
-    if (assignedAceIds.has(id) || overriddenSet.has(id)) continue;
-    const card = catalog[id]!;
-    if (card.rank === 1 && !ruleset.unusedAcesInDeck) {
-      reserve.push(id);
-    } else {
-      poolToShuffle.push(id);
-    }
-  }
-
-  const shuffled = deterministicShuffle(poolToShuffle, rngState);
-  rngState = shuffled.nextState;
-  const days = [...(options.overrideDaysTop ?? []), ...shuffled.shuffled];
-
-  let seqCounter = 0;
-  const nextSeq = (): number => {
-    seqCounter += 1;
-    return seqCounter;
-  };
-
-  const initialOpenPhase: GamePhase = ruleset.features.readings
-    ? 'AWAITING_READING'
-    : 'AWAITING_CENTER_DECISION';
-
-  const events: GameEvent[] = [
-    makeEvent(nextSeq(), 1, 1, initialOpenPhase, ruleset.version, {
-      actor: 'system',
-      type: 'GameCreated',
-      affectedCardIds: [],
-      source: 'createGame',
-      reason: 'setup',
-      visibility: 'public',
-      summary: `Started ${ruleset.name} (v${ruleset.version}) with seed "${seed}".`,
-      payload: { rulesetId: ruleset.id, rulesetVersion: ruleset.version, seed }
-    })
-  ];
-
-  // Deal starting hands (override or drawn from Days)
-  for (let i = 0; i < players.length; i++) {
-    const dealt: string[] = [];
-    if (options.overrideHands?.[i]) {
-      dealt.push(...options.overrideHands[i]!);
-    } else {
-      for (let c = 0; c < ruleset.startingHandSize && days.length > 0; c++) {
-        dealt.push(days.shift()!);
-      }
-    }
-    players[i] = { ...players[i]!, hand: dealt };
-
-    if (dealt.length > 0) {
-      events.push(
-        makeEvent(nextSeq(), 1, 1, initialOpenPhase, ruleset.version, {
-          actor: players[i]!.id,
-          type: 'CardMoved',
-          affectedCardIds: dealt,
-          source: 'setup-deal',
-          reason: 'starting-hand',
-          visibility: 'private_to_actor',
-          summary: `${players[i]!.name} received starting hand: ${dealt.map((id) => catalog[id]!.label).join(', ')}.`,
-          payload: { from: 'days', to: 'hand', count: dealt.length }
-        })
-      );
-    }
-  }
-
-  // Enforce mandatory personal evolution immediately on initial hands
-  for (let i = 0; i < players.length; i++) {
-    const evo = applyEvolutionWithEvents(players[i]!, catalog, ruleset, {
-      turn: 1,
-      round: 1,
-      phase: initialOpenPhase,
-      source: 'setup-deal',
-      nextSeq
-    });
-    players[i] = evo.player;
-    events.push(...evo.events);
-  }
-
-  // Populate Turn 1 Board: Left Event (concealed until Center pursued) + Center (concealed for Reading)
-  const boardEvent: string[] = [];
-  let eventRevealed = false;
-  if (ruleset.features.barriersAndTrials && days.length > 0 && ruleset.boardOccupancyLimits.event >= 1) {
-    const firstEventId = days.shift()!;
-    const firstEventCard = catalog[firstEventId]!;
-    boardEvent.push(firstEventId);
-    eventRevealed = false;
-
-    events.push(
-      makeEvent(nextSeq(), 1, 1, initialOpenPhase, ruleset.version, {
-        actor: 'system',
-        type: 'CardMoved',
-        affectedCardIds: [],
-        source: 'turn-setup',
-        reason: 'populate-event-concealed',
-        visibility: 'public',
-        summary: `Turn 1 Event card placed face-down in Left slot (${firstEventCard.backGroup} back).`,
-        payload: { from: 'days', to: 'event', concealed: true }
-      })
-    );
-    events.push(
-      makeEvent(nextSeq(), 1, 1, initialOpenPhase, ruleset.version, {
-        actor: 'system',
-        type: 'CardMoved',
-        affectedCardIds: [firstEventId],
-        source: 'turn-setup',
-        reason: 'populate-event-admin-detail',
-        visibility: 'admin_only',
-        summary: `[Admin] Turn 1 concealed Left Event is ${firstEventCard.label} (${eventCardToReality(firstEventCard)}, ${firstEventCard.vp} VP).`,
-        payload: { from: 'days', to: 'event', cardId: firstEventId }
-      })
-    );
-  }
-
-  const boardCenter: string[] = [];
-  let centerRevealed = !ruleset.features.readings;
-  let currentReading: ReadingRecord | null = null;
-
-  if (days.length > 0 && ruleset.boardOccupancyLimits.center >= 1) {
-    const firstCenterId = days.shift()!;
-    const firstCenterCard = catalog[firstCenterId]!;
-    boardCenter.push(firstCenterId);
-
-    if (ruleset.features.readings) {
-      centerRevealed = false;
-      currentReading = createReadingForTurn(players, 0, firstCenterCard, 1, 1, ruleset);
-      events.push(
-        makeEvent(nextSeq(), 1, 1, 'AWAITING_READING', ruleset.version, {
-          actor: 'system',
-          type: 'CardMoved',
-          affectedCardIds: [],
-          source: 'turn-setup',
-          reason: 'populate-center-concealed',
-          visibility: 'public',
-          summary: `Turn 1 concealed card placed in Center (${firstCenterCard.backGroup} back). Waiting for ${players[1]!.name}'s reading.`,
-          payload: { from: 'days', to: 'center', concealed: true, backGroup: firstCenterCard.backGroup }
-        })
-      );
-      events.push(
-        makeEvent(nextSeq(), 1, 1, 'AWAITING_READING', ruleset.version, {
-          actor: 'system',
-          type: 'CardMoved',
-          affectedCardIds: [firstCenterId],
-          source: 'turn-setup',
-          reason: 'populate-center-admin-detail',
-          visibility: 'admin_only',
-          summary: `[Admin] Turn 1 concealed Center card is ${firstCenterCard.label}.`,
-          payload: { from: 'days', to: 'center', cardId: firstCenterId }
-        })
-      );
-    } else {
-      centerRevealed = true;
-      events.push(
-        makeEvent(nextSeq(), 1, 1, 'AWAITING_CENTER_DECISION', ruleset.version, {
-          actor: 'system',
-          type: 'CardMoved',
-          affectedCardIds: [firstCenterId],
-          source: 'turn-setup',
-          reason: 'populate-center',
-          visibility: 'public',
-          summary: `Turn 1 Center revealed: ${firstCenterCard.label}.`,
-          payload: { from: 'days', to: 'center' }
-        })
-      );
-    }
-  }
-
-  const outcome = evaluateCompletion(players, days, boardCenter, ruleset);
-  const phase: GamePhase = outcome
-    ? 'GAME_OVER'
-    : boardCenter.length === 0
-      ? 'READY_TO_END_TURN'
-      : ruleset.features.readings
-        ? 'AWAITING_READING'
-        : 'AWAITING_CENTER_DECISION';
-
-  if (outcome) {
-    currentReading = null;
-    events.push(
-      makeEvent(nextSeq(), 1, 1, 'GAME_OVER', ruleset.version, {
-        actor: 'system',
-        type: 'GameCompleted',
-        affectedCardIds: [],
-        source: 'setup-completion',
-        reason: outcome.reason,
-        visibility: 'public',
-        summary: outcome.summary,
-        payload: { ...outcome }
-      })
-    );
-  } else {
-    events.push(
-      makeEvent(nextSeq(), 1, 1, phase, ruleset.version, {
-        actor: players[0]!.id,
-        type: 'TurnStarted',
-        affectedCardIds: [],
-        source: 'turn-cycle',
-        reason: 'turn-begin',
-        visibility: 'public',
-        summary: `Round 1, Turn 1 — ${players[0]!.name}'s turn.`
-      })
-    );
-  }
-
-  return finalizeState({
-    engineVersion: ENGINE_VERSION,
-    ruleset,
-    seed,
-    rngState,
-    cards: catalog,
-    deckCardIds: allCardIds,
-    phase,
-    round: 1,
-    turn: 1,
-    activePlayerIndex: 0,
-    activePlayerId: players[0]!.id,
-    days,
-    veil: [],
-    reserve,
-    board: { event: boardEvent, center: boardCenter, parallel: [] },
-    eventRevealed,
-    centerRevealed,
-    centerAbandoned: false,
-    abandonedByPlayerId: null,
-    currentReading,
-    readingHistory: [],
-    majorPending: [],
-    players,
-    activeEffects: [],
-    connections: [],
-    entropy: { active: false, cycleIndex: 0 },
-    status: outcome ? 'completed' : 'playing',
-    outcome,
-    commandHistory: [],
-    rejectedCommands: [],
-    events
-  });
-}
-
-/**
- * Pure deterministic command dispatcher implementing Milestones A + B + C.
+ * Pure deterministic command dispatcher implementing Milestones A + B + C + D0 + D1.
  */
 export function dispatch(state: GameState, command: Command): DispatchResult {
   const futureGate = FUTURE_FEATURE_COMMANDS[command.type];
@@ -650,15 +122,17 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
     hand: [...p.hand],
     pendingReaderBonuses: [...p.pendingReaderBonuses]
   }));
-  const days = [...state.days];
-  const veil = [...state.veil];
-  const boardEvent = [...state.board.event];
-  const boardCenter = [...state.board.center];
+  let days = [...state.days];
+  let veil = [...state.veil];
+  let boardEvent = [...state.board.event];
+  let boardCenter = [...state.board.center];
   const boardParallel = [...state.board.parallel];
   let eventRevealed = state.eventRevealed;
   let centerRevealed = state.centerRevealed;
   let centerAbandoned = state.centerAbandoned;
   let abandonedByPlayerId = state.abandonedByPlayerId;
+  let discardedCenterThisTurn = state.discardedCenterThisTurn;
+  let rngState = state.rngState;
   let currentReading: ReadingRecord | null = state.currentReading ? { ...state.currentReading } : null;
   const readingHistory: ReadingRecord[] = [...state.readingHistory];
   let phase: GamePhase = state.phase;
@@ -669,94 +143,22 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
 
   const activePlayer = players[state.activePlayerIndex]!;
 
-  const finalizeReadingReward = (
-    reading: ReadingRecord,
-    resolution: 'claimed' | 'discarded' | 'abandoned',
-    sourceCard: Card
-  ): void => {
-    const readerIdx = players.findIndex((p) => p.id === reading.readerId);
-    const reader = readerIdx >= 0 ? players[readerIdx]! : null;
-
-    let grant = false;
-    let trigger: 'good_claimed' | 'bad_discarded' | 'good_abandoned' | null = null;
-    let reason = 'advice_not_followed';
-
-    if (reading.adviceFollowed) {
-      if (reading.advice === 'bad' && resolution === 'discarded') {
-        grant = true;
-        trigger = 'bad_discarded';
-        reason = 'followed_bad_advice_discarded';
-      } else if (reading.advice === 'good' && resolution === 'claimed') {
-        grant = true;
-        trigger = 'good_claimed';
-        reason = 'followed_good_advice_claimed';
-      } else if (reading.advice === 'good' && resolution === 'abandoned') {
-        if (state.ruleset.readerBonusOnAbandon) {
-          grant = true;
-          trigger = 'good_abandoned';
-          reason = 'followed_good_advice_abandoned_override';
-        } else {
-          grant = false;
-          reason = 'abandoned_before_claim';
-        }
+  const resolvePostEncounterPhase = (): GamePhase => {
+    const currentActive = players[state.activePlayerIndex]!;
+    if (currentActive.hand.length > state.ruleset.maxHandSize) {
+      return 'AWAITING_HAND_DISCARD';
+    }
+    if (state.ruleset.features.elementalEffects) {
+      const hasAvailableBonus =
+        getAvailableReaderBonusesForTurn(currentActive, turn, state.ruleset).length > 0;
+      const canAct =
+        !currentActive.effectUsedThisTurn ||
+        (!state.ruleset.readerBonusConsumesTurnAction && hasAvailableBonus);
+      if (canAct) {
+        return 'AWAITING_ELEMENTAL_ACTION';
       }
     }
-
-    const completedRecord: ReadingRecord = {
-      ...reading,
-      resolution,
-      readerReward: grant ? 'granted' : 'withheld',
-      readerRewardReason: reason
-    };
-    readingHistory.push(completedRecord);
-
-    if (grant && reader && trigger) {
-      const bonus = {
-        id: `rb-t${turn}-${reader.pendingReaderBonuses.length + 1}`,
-        earnedOnTurn: turn,
-        fromPlayerId: activePlayer.id,
-        sourceCardId: sourceCard.id,
-        sourceElement: sourceCard.element,
-        trigger,
-        status: 'pending_spec' as const
-      };
-      players[readerIdx] = {
-        ...reader,
-        pendingReaderBonuses: [...reader.pendingReaderBonuses, bonus]
-      };
-      newEvents.push(
-        makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
-          actor: reader.id,
-          type: 'ReaderRewardGranted',
-          affectedCardIds: [sourceCard.id],
-          source: 'reading-resolution',
-          reason,
-          visibility: 'public',
-          summary: `${reader.name} earned a pending Reader elemental bonus (${sourceCard.element ?? 'neutral'} from ${sourceCard.label}; ${reason}).`,
-          payload: { ...bonus, adviceTruthful: completedRecord.adviceTruthful }
-        })
-      );
-    } else if (reader) {
-      newEvents.push(
-        makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
-          actor: reader.id,
-          type: 'ReaderRewardWithheld',
-          affectedCardIds: [sourceCard.id],
-          source: 'reading-resolution',
-          reason,
-          visibility: 'public',
-          summary: `${reader.name}'s Reader bonus was withheld (${reason}).`,
-          payload: {
-            readerId: reader.id,
-            advice: completedRecord.advice,
-            playerAction: completedRecord.playerAction,
-            resolution,
-            adviceFollowed: completedRecord.adviceFollowed,
-            adviceTruthful: completedRecord.adviceTruthful
-          }
-        })
-      );
-    }
+    return 'READY_TO_END_TURN';
   };
 
   const claimCenterAndEvolve = (sourceName: string): Card => {
@@ -785,7 +187,7 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
     return claimedCard;
   };
 
-  const moveResolvedEventToVeil = (reason: string): void => {
+  const moveResolvedEventToVeil = (reason: string, summaryPrefix = 'Resolved Left Event'): void => {
     if (boardEvent.length === 0) return;
     const evId = boardEvent.shift()!;
     eventRevealed = false;
@@ -798,7 +200,7 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
         source: 'event-cleanup',
         reason,
         visibility: 'public',
-        summary: `Resolved Left Event (${state.cards[evId]!.label}) moved to the Veil.`,
+        summary: `${summaryPrefix} (${state.cards[evId]!.label}) moved to the Veil.`,
         payload: { from: 'event', to: 'veil' }
       })
     );
@@ -850,6 +252,39 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
     );
   };
 
+  const makeElementalContext = (): ElementalMutableContext => ({
+    cards: state.cards,
+    ruleset: state.ruleset,
+    turn,
+    round,
+    phase,
+    activePlayerIndex: state.activePlayerIndex,
+    players,
+    days,
+    veil,
+    boardEvent,
+    boardCenter,
+    eventRevealed,
+    centerRevealed,
+    centerAbandoned,
+    abandonedByPlayerId,
+    rngState,
+    newEvents,
+    nextSeq
+  });
+
+  const syncFromElementalContext = (ctx: ElementalMutableContext): void => {
+    days = ctx.days;
+    veil = ctx.veil;
+    boardEvent = ctx.boardEvent;
+    boardCenter = ctx.boardCenter;
+    eventRevealed = ctx.eventRevealed;
+    centerRevealed = ctx.centerRevealed;
+    centerAbandoned = ctx.centerAbandoned;
+    abandonedByPlayerId = ctx.abandonedByPlayerId;
+    rngState = ctx.rngState;
+  };
+
   switch (command.type) {
     case 'ClaimAbandonedCard': {
       if (state.phase !== 'AWAITING_ABANDONED_CHOICE' || !centerAbandoned || boardCenter.length === 0) {
@@ -874,10 +309,7 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
       );
 
       claimCenterAndEvolve('ClaimAbandonedCard');
-
-      const postHand = players[state.activePlayerIndex]!.hand;
-      phase =
-        postHand.length > state.ruleset.maxHandSize ? 'AWAITING_HAND_DISCARD' : 'READY_TO_END_TURN';
+      phase = resolvePostEncounterPhase();
       break;
     }
 
@@ -916,7 +348,7 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
         centerRevealed = true;
         phase = 'AWAITING_CENTER_DECISION';
       } else {
-        phase = 'READY_TO_END_TURN';
+        phase = resolvePostEncounterPhase();
       }
       break;
     }
@@ -1007,7 +439,6 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
         })
       );
 
-      // If Event Realities (Milestone C) are enabled and an Event card exists, reveal Left Event!
       if (state.ruleset.features.barriersAndTrials && boardEvent.length > 0) {
         const eventId = boardEvent[0]!;
         const eventCard = state.cards[eventId]!;
@@ -1033,14 +464,23 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
           })
         );
       } else {
-        // Tutorial 1.2 (no Event realities) OR Days exhausted so no Event card left -> frictionless claim
         claimCenterAndEvolve('PursueCenter');
-        finalizeReadingReward(currentReading, 'claimed', centerCard);
+        finalizeReadingReward({
+          reading: currentReading,
+          resolution: 'claimed',
+          sourceCard: centerCard,
+          activePlayerId: activePlayer.id,
+          players,
+          readingHistory,
+          newEvents,
+          turn,
+          round,
+          phase,
+          ruleset: state.ruleset,
+          nextSeq
+        });
         currentReading = null;
-
-        const postHand = players[state.activePlayerIndex]!.hand;
-        phase =
-          postHand.length > state.ruleset.maxHandSize ? 'AWAITING_HAND_DISCARD' : 'READY_TO_END_TURN';
+        phase = resolvePostEncounterPhase();
       }
       break;
     }
@@ -1063,6 +503,7 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
       const discardedCard = state.cards[discardedId]!;
       const adviceFollowed = currentReading.advice === 'bad';
       centerRevealed = true;
+      discardedCenterThisTurn = true;
       veil.push(discardedId);
 
       const updatedReading: ReadingRecord = {
@@ -1089,9 +530,22 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
         })
       );
 
-      finalizeReadingReward(updatedReading, 'discarded', discardedCard);
+      finalizeReadingReward({
+        reading: updatedReading,
+        resolution: 'discarded',
+        sourceCard: discardedCard,
+        activePlayerId: activePlayer.id,
+        players,
+        readingHistory,
+        newEvents,
+        turn,
+        round,
+        phase,
+        ruleset: state.ruleset,
+        nextSeq
+      });
       currentReading = null;
-      phase = 'READY_TO_END_TURN';
+      phase = resolvePostEncounterPhase();
       break;
     }
 
@@ -1109,7 +563,6 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
         });
       }
 
-      // Validate sacrificed card IDs belong uniquely to activePlayer's hand
       const seenSac = new Set<string>();
       for (const sacId of command.sacrificeCardIds) {
         if (seenSac.has(sacId)) {
@@ -1164,7 +617,6 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
         });
       }
 
-      // Move sacrificed cards to Veil (provisional test preset)
       if (command.sacrificeCardIds.length > 0) {
         const sacSet = new Set(command.sacrificeCardIds);
         players[state.activePlayerIndex] = {
@@ -1229,21 +681,28 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
         );
       }
 
-      // Claim Center & run mandatory chained evolution!
       claimCenterAndEvolve('ResolveEvent');
 
-      // Finalize Reading Reward (GOOD + PURSUE + CLAIM grants bonus!)
       if (currentReading) {
-        finalizeReadingReward(currentReading, 'claimed', centerCard);
+        finalizeReadingReward({
+          reading: currentReading,
+          resolution: 'claimed',
+          sourceCard: centerCard,
+          activePlayerId: activePlayer.id,
+          players,
+          readingHistory,
+          newEvents,
+          turn,
+          round,
+          phase,
+          ruleset: state.ruleset,
+          nextSeq
+        });
         currentReading = null;
       }
 
-      // Cleanup Left Event to Veil
       moveResolvedEventToVeil(`event-${breakdown.reality}-resolved`);
-
-      const postHand = players[state.activePlayerIndex]!.hand;
-      phase =
-        postHand.length > state.ruleset.maxHandSize ? 'AWAITING_HAND_DISCARD' : 'READY_TO_END_TURN';
+      phase = resolvePostEncounterPhase();
       break;
     }
 
@@ -1271,7 +730,6 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
         });
       }
 
-      // Leave Center face-up for the next player!
       centerAbandoned = true;
       centerRevealed = true;
       abandonedByPlayerId = activePlayer.id;
@@ -1289,14 +747,26 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
         })
       );
 
-      // Creator ruling: GOOD + PURSUE + ABANDON withholds Reader bonus unless readerBonusOnAbandon=true
       if (currentReading) {
-        finalizeReadingReward(currentReading, 'abandoned', centerCard);
+        finalizeReadingReward({
+          reading: currentReading,
+          resolution: 'abandoned',
+          sourceCard: centerCard,
+          activePlayerId: activePlayer.id,
+          players,
+          readingHistory,
+          newEvents,
+          turn,
+          round,
+          phase,
+          ruleset: state.ruleset,
+          nextSeq
+        });
         currentReading = null;
       }
 
       moveResolvedEventToVeil(`event-${reality}-abandoned`);
-      phase = 'READY_TO_END_TURN';
+      phase = resolvePostEncounterPhase();
       break;
     }
 
@@ -1326,9 +796,7 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
         })
       );
       claimCenterAndEvolve('ClaimCenterCard');
-      const postHand = players[state.activePlayerIndex]!.hand;
-      phase =
-        postHand.length > state.ruleset.maxHandSize ? 'AWAITING_HAND_DISCARD' : 'READY_TO_END_TURN';
+      phase = resolvePostEncounterPhase();
       break;
     }
 
@@ -1359,10 +827,7 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
           summary: `${activePlayer.name} sent ${discardedCard.label} from Center to the Veil.`
         })
       );
-      phase =
-        players[state.activePlayerIndex]!.hand.length > state.ruleset.maxHandSize
-          ? 'AWAITING_HAND_DISCARD'
-          : 'READY_TO_END_TURN';
+      phase = resolvePostEncounterPhase();
       break;
     }
 
@@ -1397,8 +862,29 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
         })
       );
 
-      phase =
-        nextHand.length > state.ruleset.maxHandSize ? 'AWAITING_HAND_DISCARD' : 'READY_TO_END_TURN';
+      phase = resolvePostEncounterPhase();
+      break;
+    }
+
+    case 'UseElementalEffect': {
+      const ctx = makeElementalContext();
+      const res = validateAndExecuteElementalEffect(ctx, command);
+      if (!res.ok) {
+        return fail(state, command, res.error);
+      }
+      syncFromElementalContext(ctx);
+      phase = resolvePostEncounterPhase();
+      break;
+    }
+
+    case 'UseReaderBonus': {
+      const ctx = makeElementalContext();
+      const res = validateAndExecuteReaderBonus(ctx, command);
+      if (!res.ok) {
+        return fail(state, command, res.error);
+      }
+      syncFromElementalContext(ctx);
+      phase = resolvePostEncounterPhase();
       break;
     }
 
@@ -1411,6 +897,7 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
       }
       if (
         state.phase !== 'READY_TO_END_TURN' &&
+        state.phase !== 'AWAITING_ELEMENTAL_ACTION' &&
         !(state.phase === 'AWAITING_CENTER_DECISION' && boardCenter.length === 0)
       ) {
         return fail(state, command, {
@@ -1419,11 +906,36 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
         });
       }
 
+      // Expire any unused Reader bonuses earned prior to this turn
+      const afterExpiry = expireUnusedReaderBonuses({
+        player: players[state.activePlayerIndex]!,
+        currentTurn: turn,
+        round,
+        phase,
+        ruleset: state.ruleset,
+        newEvents,
+        nextSeq
+      });
+
       players[state.activePlayerIndex] = {
-        ...activePlayer,
-        turnsTaken: activePlayer.turnsTaken + 1,
+        ...afterExpiry,
+        turnsTaken: afterExpiry.turnsTaken + 1,
         effectUsedThisTurn: false
       };
+
+      // D0 Finding D: Optional provisional rotation of unused Left Event when Center was discarded
+      if (
+        state.ruleset.rotateEventOnCenterDiscard &&
+        discardedCenterThisTurn &&
+        boardEvent.length > 0 &&
+        !eventRevealed
+      ) {
+        moveResolvedEventToVeil(
+          'rotate-unused-event-on-center-discard',
+          'Unused Left Event rotated to Veil after Center discard'
+        );
+      }
+      discardedCenterThisTurn = false;
 
       newEvents.push(
         makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
@@ -1461,7 +973,6 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
         }
         activePlayerId = players[activePlayerIndex]!.id;
 
-        // Refill Left Event if empty & barriersAndTrials enabled (never double-draw if unrevealed Event persisted!)
         if (
           state.ruleset.features.barriersAndTrials &&
           boardEvent.length === 0 &&
@@ -1498,7 +1009,6 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
           );
         }
 
-        // Check if an abandoned Center card persisted from previous turn
         if (centerAbandoned && boardCenter.length > 0) {
           phase = 'AWAITING_ABANDONED_CHOICE';
           currentReading = null;
@@ -1525,7 +1035,6 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
             );
           }
         } else {
-          // Days ran out and no Center card left -> game ends now!
           const postOutcome = evaluateCompletion(players, days, boardCenter, state.ruleset);
           if (postOutcome) {
             phase = 'GAME_OVER';
@@ -1599,6 +1108,7 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
   const allEvents = [...state.events, ...newEvents];
   const draftState: Omit<GameState, 'stateHash'> = {
     ...state,
+    rngState,
     phase,
     round,
     turn,
@@ -1615,6 +1125,7 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
     centerRevealed,
     centerAbandoned,
     abandonedByPlayerId,
+    discardedCenterThisTurn,
     currentReading,
     readingHistory,
     players,
