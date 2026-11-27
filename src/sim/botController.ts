@@ -83,6 +83,7 @@ function toEvalPlayer(p: ProjectedPlayerView): PlayerState {
     },
     hand: p.hand ? p.hand.map((c) => c.id) : [],
     eclipseCount: p.eclipseCount,
+    eclipseBonusVP: p.eclipseBonusVP,
     effectUsedThisTurn: p.effectUsedThisTurn,
     pendingReaderBonuses: p.pendingReaderBonuses,
     evolutionsCompleted: p.evolutionsCompleted,
@@ -417,7 +418,9 @@ export function chooseFairBotCommand(
       }
     }
 
-    return { type: 'EndTurn', playerId: botPlayerId };
+    return view.ruleset.elementalTiming === 'before_reading'
+      ? { type: 'AdvanceToReading', playerId: botPlayerId }
+      : { type: 'EndTurn', playerId: botPlayerId };
   }
 
   if (view.phase === 'AWAITING_CENTER_DECISION') {

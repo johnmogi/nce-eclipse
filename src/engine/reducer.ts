@@ -14,6 +14,13 @@ import {
 } from './event-helpers.js';
 import { computeStateHash } from './hash.js';
 import {
+  activateReadyDormantMajors,
+  drawNextMinorRoutingMajors,
+  evaluateCombos,
+  isMajorCard,
+  type MajorMutableBoard
+} from './majors.js';
+import {
   computeReadingHints,
   createReadingForTurn,
   finalizeReadingReward,
@@ -31,6 +38,7 @@ import type {
   GameOutcome,
   GamePhase,
   GameState,
+  MajorPendingEntry,
   PlayerState,
   ReadingRecord,
   Ruleset,
@@ -51,6 +59,7 @@ const FUTURE_FEATURE_COMMANDS: Readonly<
   DeclineAbandonedCard: { flag: 'barriersAndTrials', label: 'Event Realities (Milestone C / Level 1.3)' },
   UseElementalEffect: { flag: 'elementalEffects', label: 'Elemental Hand Effects (Milestone D1)' },
   UseReaderBonus: { flag: 'elementalEffects', label: 'Reader Bonus Elemental Action (Milestone D1)' },
+  AdvanceToReading: { flag: 'elementalEffects', label: 'Pre-Reading Elemental Prep (Milestone E)' },
   ProposeTrade: { flag: 'tradingMarket', label: 'Trading Market (Milestone D2)' },
   AcceptTrade: { flag: 'tradingMarket', label: 'Trading Market (Milestone D2)' },
   ChooseMajorExit: { flag: 'majors', label: 'Major Arcana Contention (Milestone E)' },
@@ -126,7 +135,8 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
   let veil = [...state.veil];
   let boardEvent = [...state.board.event];
   let boardCenter = [...state.board.center];
-  const boardParallel = [...state.board.parallel];
+  let boardParallel = [...state.board.parallel];
+  let majorPending: MajorPendingEntry[] = state.majorPending.map((m) => ({ ...m }));
   let eventRevealed = state.eventRevealed;
   let centerRevealed = state.centerRevealed;
   let centerAbandoned = state.centerAbandoned;
@@ -140,15 +150,130 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
   let round = state.round;
   let activePlayerIndex = state.activePlayerIndex;
   let activePlayerId = state.activePlayerId;
+  let comboOutcome: GameOutcome | undefined;
 
   const activePlayer = players[state.activePlayerIndex]!;
+
+  const makeMajorBoardCtx = (): MajorMutableBoard => ({
+    cards: state.cards,
+    ruleset: state.ruleset,
+    turn,
+    round,
+    phase,
+    activePlayerIndex,
+    players,
+    days,
+    veil,
+    boardEvent,
+    boardCenter,
+    boardParallel,
+    eventRevealed,
+    centerRevealed,
+    centerAbandoned,
+    abandonedByPlayerId,
+    majorPending,
+    newEvents,
+    nextSeq
+  });
+
+  const syncFromMajorBoardCtx = (ctx: MajorMutableBoard): void => {
+    days = ctx.days;
+    veil = ctx.veil;
+    boardEvent = ctx.boardEvent;
+    boardCenter = ctx.boardCenter;
+    boardParallel = ctx.boardParallel;
+    eventRevealed = ctx.eventRevealed;
+    centerRevealed = ctx.centerRevealed;
+    centerAbandoned = ctx.centerAbandoned;
+    abandonedByPlayerId = ctx.abandonedByPlayerId;
+    majorPending = ctx.majorPending;
+  };
+
+  const applyComboOutcomeIfAny = (found: GameOutcome | undefined, source: string): boolean => {
+    if (!found) return false;
+    comboOutcome = found;
+    phase = 'GAME_OVER';
+    currentReading = null;
+    newEvents.push(
+      makeEvent(nextSeq(), turn, round, 'GAME_OVER', state.ruleset.version, {
+        actor: 'system',
+        type: 'GameCompleted',
+        affectedCardIds: [],
+        source,
+        reason: found.reason,
+        visibility: 'public',
+        summary: found.summary,
+        payload: { ...found }
+      })
+    );
+    return true;
+  };
+
+  const runComboCheck = (source: string): boolean => {
+    if (!state.ruleset.features.eclipse && !state.ruleset.features.triangulation) return false;
+    const mctx = makeMajorBoardCtx();
+    const res = evaluateCombos(mctx);
+    syncFromMajorBoardCtx(mctx);
+    return applyComboOutcomeIfAny(res, source);
+  };
+
+  const populateEventSlotFromDays = (source: string): boolean => {
+    if (
+      !state.ruleset.features.barriersAndTrials ||
+      boardEvent.length > 0 ||
+      days.length === 0 ||
+      state.ruleset.boardOccupancyLimits.event < 1
+    ) {
+      return false;
+    }
+    const mctx = makeMajorBoardCtx();
+    const drawEv = drawNextMinorRoutingMajors(mctx, 'event', source);
+    syncFromMajorBoardCtx(mctx);
+    if (applyComboOutcomeIfAny(drawEv.outcome, source)) {
+      return true;
+    }
+    if (drawEv.minorCardId) {
+      const nextEventId = drawEv.minorCardId;
+      const nextEventCard = state.cards[nextEventId]!;
+      boardEvent.push(nextEventId);
+      eventRevealed = false;
+      newEvents.push(
+        makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
+          actor: 'system',
+          type: 'CardMoved',
+          affectedCardIds: [],
+          source,
+          reason: 'populate-event-concealed',
+          visibility: 'public',
+          summary: `Turn ${turn} Event card placed face-down in Left slot (${nextEventCard.backGroup} back).`,
+          payload: { from: 'days', to: 'event', concealed: true }
+        })
+      );
+      newEvents.push(
+        makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
+          actor: 'system',
+          type: 'CardMoved',
+          affectedCardIds: [nextEventId],
+          source,
+          reason: 'populate-event-admin-detail',
+          visibility: 'admin_only',
+          summary: `[Admin] Turn ${turn} concealed Left Event is ${nextEventCard.label} (${eventCardToReality(nextEventCard)}, ${nextEventCard.vp} VP).`,
+          payload: { from: 'days', to: 'event', cardId: nextEventId }
+        })
+      );
+    }
+    return false;
+  };
 
   const resolvePostEncounterPhase = (): GamePhase => {
     const currentActive = players[state.activePlayerIndex]!;
     if (currentActive.hand.length > state.ruleset.maxHandSize) {
       return 'AWAITING_HAND_DISCARD';
     }
-    if (state.ruleset.features.elementalEffects) {
+    if (
+      state.ruleset.features.elementalEffects &&
+      state.ruleset.elementalTiming === 'after_encounter'
+    ) {
       const hasAvailableBonus =
         getAvailableReaderBonusesForTurn(currentActive, turn, state.ruleset).length > 0;
       const canAct =
@@ -189,7 +314,10 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
 
   const moveResolvedEventToVeil = (reason: string, summaryPrefix = 'Resolved Left Event'): void => {
     if (boardEvent.length === 0) return;
-    const evId = boardEvent.shift()!;
+    const evId = boardEvent[0]!;
+    // Classic Court (Major) standing in Left Event remains on the Board for Eclipse/Triangulation!
+    if (isMajorCard(state.cards[evId])) return;
+    boardEvent.shift();
     eventRevealed = false;
     veil.push(evId);
     newEvents.push(
@@ -206,25 +334,43 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
     );
   };
 
-  const dealFreshConcealedCenterForReading = (sourceName: string): void => {
+  const dealFreshConcealedCenterForReading = (
+    sourceName: string,
+    deferReadingForPreElemental = false
+  ): boolean => {
     if (days.length === 0 || state.ruleset.boardOccupancyLimits.center < 1) {
       phase = 'READY_TO_END_TURN';
-      return;
+      return false;
     }
-    const nextCenterId = days.shift()!;
+    const mctx = makeMajorBoardCtx();
+    const drawCtr = drawNextMinorRoutingMajors(mctx, 'center', sourceName);
+    syncFromMajorBoardCtx(mctx);
+    if (applyComboOutcomeIfAny(drawCtr.outcome, sourceName)) {
+      return true;
+    }
+    if (!drawCtr.minorCardId) {
+      phase = 'READY_TO_END_TURN';
+      return false;
+    }
+    const nextCenterId = drawCtr.minorCardId;
     const nextCenterCard = state.cards[nextCenterId]!;
     boardCenter.push(nextCenterId);
     centerRevealed = false;
-    currentReading = createReadingForTurn(
-      players,
-      activePlayerIndex,
-      nextCenterCard,
-      turn,
-      round,
-      state.ruleset
-    );
     const reader = players[(activePlayerIndex + 1) % players.length]!;
-    phase = 'AWAITING_READING';
+    if (deferReadingForPreElemental) {
+      currentReading = null;
+      phase = 'AWAITING_ELEMENTAL_ACTION';
+    } else {
+      currentReading = createReadingForTurn(
+        players,
+        activePlayerIndex,
+        nextCenterCard,
+        turn,
+        round,
+        state.ruleset
+      );
+      phase = 'AWAITING_READING';
+    }
 
     newEvents.push(
       makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
@@ -234,7 +380,9 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
         source: sourceName,
         reason: 'populate-center-concealed',
         visibility: 'public',
-        summary: `Turn ${turn} concealed card placed in Center (${nextCenterCard.backGroup} back). Waiting for ${reader.name}'s reading.`,
+        summary: deferReadingForPreElemental
+          ? `Turn ${turn} concealed card placed in Center (${nextCenterCard.backGroup} back). Optional Elemental Prep open before Reading.`
+          : `Turn ${turn} concealed card placed in Center (${nextCenterCard.backGroup} back). Waiting for ${reader.name}'s reading.`,
         payload: { from: 'days', to: 'center', concealed: true, backGroup: nextCenterCard.backGroup }
       })
     );
@@ -250,6 +398,50 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
         payload: { from: 'days', to: 'center', cardId: nextCenterId }
       })
     );
+    return false;
+  };
+
+  const enterReadingOrAbandonedPhase = (sourceName: string): void => {
+    if (populateEventSlotFromDays(sourceName)) return;
+    if (centerAbandoned && boardCenter.length > 0) {
+      phase = 'AWAITING_ABANDONED_CHOICE';
+      currentReading = null;
+      return;
+    }
+    if (boardCenter.length > 0) {
+      const existingCenterId = boardCenter[0]!;
+      const existingCenterCard = state.cards[existingCenterId]!;
+      if (state.ruleset.features.readings) {
+        centerRevealed = false;
+        currentReading = createReadingForTurn(
+          players,
+          activePlayerIndex,
+          existingCenterCard,
+          turn,
+          round,
+          state.ruleset
+        );
+        phase = 'AWAITING_READING';
+      } else {
+        centerRevealed = true;
+        currentReading = null;
+        phase = 'AWAITING_CENTER_DECISION';
+      }
+      return;
+    }
+    if (days.length > 0) {
+      if (state.ruleset.features.readings) {
+        dealFreshConcealedCenterForReading(sourceName, false);
+      } else {
+        const nextCenterId = days.shift()!;
+        boardCenter.push(nextCenterId);
+        centerRevealed = true;
+        currentReading = null;
+        phase = 'AWAITING_CENTER_DECISION';
+      }
+      return;
+    }
+    phase = 'READY_TO_END_TURN';
   };
 
   const makeElementalContext = (): ElementalMutableContext => ({
@@ -264,6 +456,8 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
     veil,
     boardEvent,
     boardCenter,
+    boardParallel,
+    majorPending,
     eventRevealed,
     centerRevealed,
     centerAbandoned,
@@ -278,6 +472,8 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
     veil = ctx.veil;
     boardEvent = ctx.boardEvent;
     boardCenter = ctx.boardCenter;
+    boardParallel = ctx.boardParallel;
+    majorPending = ctx.majorPending;
     eventRevealed = ctx.eventRevealed;
     centerRevealed = ctx.centerRevealed;
     centerAbandoned = ctx.centerAbandoned;
@@ -866,6 +1062,20 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
       break;
     }
 
+    case 'AdvanceToReading': {
+      if (
+        state.phase !== 'AWAITING_ELEMENTAL_ACTION' ||
+        state.ruleset.elementalTiming !== 'before_reading'
+      ) {
+        return fail(state, command, {
+          code: 'INVALID_PHASE',
+          message: `AdvanceToReading is only valid during pre-reading AWAITING_ELEMENTAL_ACTION (current: ${state.phase}).`
+        });
+      }
+      enterReadingOrAbandonedPhase('AdvanceToReading');
+      break;
+    }
+
     case 'UseElementalEffect': {
       const ctx = makeElementalContext();
       const res = validateAndExecuteElementalEffect(ctx, command);
@@ -873,7 +1083,19 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
         return fail(state, command, res.error);
       }
       syncFromElementalContext(ctx);
-      phase = resolvePostEncounterPhase();
+      if (!runComboCheck('UseElementalEffect')) {
+        if (state.ruleset.elementalTiming === 'before_reading') {
+          const currentActive = players[state.activePlayerIndex]!;
+          const hasExtraBonus =
+            !state.ruleset.readerBonusConsumesTurnAction &&
+            getAvailableReaderBonusesForTurn(currentActive, turn, state.ruleset).length > 0;
+          if (!hasExtraBonus) {
+            enterReadingOrAbandonedPhase('UseElementalEffect');
+          }
+        } else {
+          phase = resolvePostEncounterPhase();
+        }
+      }
       break;
     }
 
@@ -884,7 +1106,16 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
         return fail(state, command, res.error);
       }
       syncFromElementalContext(ctx);
-      phase = resolvePostEncounterPhase();
+      if (!runComboCheck('UseReaderBonus')) {
+        if (state.ruleset.elementalTiming === 'before_reading') {
+          const currentActive = players[state.activePlayerIndex]!;
+          if (currentActive.effectUsedThisTurn) {
+            enterReadingOrAbandonedPhase('UseReaderBonus');
+          }
+        } else {
+          phase = resolvePostEncounterPhase();
+        }
+      }
       break;
     }
 
@@ -895,9 +1126,12 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
           message: `Hand size (${activePlayer.hand.length}) exceeds maxHandSize (${state.ruleset.maxHandSize}); discard first.`
         });
       }
+      const canEndFromElemental =
+        state.phase === 'AWAITING_ELEMENTAL_ACTION' &&
+        state.ruleset.elementalTiming === 'after_encounter';
       if (
         state.phase !== 'READY_TO_END_TURN' &&
-        state.phase !== 'AWAITING_ELEMENTAL_ACTION' &&
+        !canEndFromElemental &&
         !(state.phase === 'AWAITING_CENTER_DECISION' && boardCenter.length === 0)
       ) {
         return fail(state, command, {
@@ -973,86 +1207,66 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
         }
         activePlayerId = players[activePlayerIndex]!.id;
 
-        if (
-          state.ruleset.features.barriersAndTrials &&
-          boardEvent.length === 0 &&
-          days.length > 0 &&
-          state.ruleset.boardOccupancyLimits.event >= 1
-        ) {
-          const nextEventId = days.shift()!;
-          const nextEventCard = state.cards[nextEventId]!;
-          boardEvent.push(nextEventId);
-          eventRevealed = false;
-          newEvents.push(
-            makeEvent(nextSeq(), turn, round, 'AWAITING_READING', state.ruleset.version, {
-              actor: 'system',
-              type: 'CardMoved',
-              affectedCardIds: [],
-              source: 'turn-refill',
-              reason: 'populate-event-concealed',
-              visibility: 'public',
-              summary: `Turn ${turn} Event card placed face-down in Left slot (${nextEventCard.backGroup} back).`,
-              payload: { from: 'days', to: 'event', concealed: true }
-            })
-          );
-          newEvents.push(
-            makeEvent(nextSeq(), turn, round, 'AWAITING_READING', state.ruleset.version, {
-              actor: 'system',
-              type: 'CardMoved',
-              affectedCardIds: [nextEventId],
-              source: 'turn-refill',
-              reason: 'populate-event-admin-detail',
-              visibility: 'admin_only',
-              summary: `[Admin] Turn ${turn} concealed Left Event is ${nextEventCard.label} (${eventCardToReality(nextEventCard)}, ${nextEventCard.vp} VP).`,
-              payload: { from: 'days', to: 'event', cardId: nextEventId }
-            })
-          );
+        // Awaken any dormant Major Arcana whose dormancy expires on this turn
+        if (state.ruleset.features.majors && majorPending.length > 0) {
+          const mctx = makeMajorBoardCtx();
+          activateReadyDormantMajors(mctx);
+          syncFromMajorBoardCtx(mctx);
         }
 
-        if (centerAbandoned && boardCenter.length > 0) {
-          phase = 'AWAITING_ABANDONED_CHOICE';
-          currentReading = null;
-        } else if (boardCenter.length === 0 && days.length > 0) {
-          if (state.ruleset.features.readings) {
-            dealFreshConcealedCenterForReading('turn-refill');
-          } else {
-            const nextCenterId = days.shift()!;
-            boardCenter.push(nextCenterId);
-            centerRevealed = true;
+        const endedByEventDraw = populateEventSlotFromDays('turn-refill');
+        const preReadingElemental =
+          state.ruleset.features.elementalEffects &&
+          state.ruleset.elementalTiming === 'before_reading';
+
+        if (!endedByEventDraw) {
+          if (centerAbandoned && boardCenter.length > 0) {
+            phase = preReadingElemental
+              ? 'AWAITING_ELEMENTAL_ACTION'
+              : 'AWAITING_ABANDONED_CHOICE';
             currentReading = null;
-            phase = 'AWAITING_CENTER_DECISION';
-            newEvents.push(
-              makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
-                actor: 'system',
-                type: 'CardMoved',
-                affectedCardIds: [nextCenterId],
-                source: 'turn-refill',
-                reason: 'populate-center',
-                visibility: 'public',
-                summary: `Turn ${turn} Center revealed: ${state.cards[nextCenterId]!.label}.`,
-                payload: { from: 'days', to: 'center' }
-              })
-            );
-          }
-        } else {
-          const postOutcome = evaluateCompletion(players, days, boardCenter, state.ruleset);
-          if (postOutcome) {
-            phase = 'GAME_OVER';
-            currentReading = null;
-            newEvents.push(
-              makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
-                actor: 'system',
-                type: 'GameCompleted',
-                affectedCardIds: [],
-                source: 'EndTurn',
-                reason: postOutcome.reason,
-                visibility: 'public',
-                summary: postOutcome.summary,
-                payload: { ...postOutcome }
-              })
-            );
+          } else if (boardCenter.length === 0 && days.length > 0) {
+            if (state.ruleset.features.readings) {
+              dealFreshConcealedCenterForReading('turn-refill', preReadingElemental);
+            } else {
+              const nextCenterId = days.shift()!;
+              boardCenter.push(nextCenterId);
+              centerRevealed = true;
+              currentReading = null;
+              phase = 'AWAITING_CENTER_DECISION';
+              newEvents.push(
+                makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
+                  actor: 'system',
+                  type: 'CardMoved',
+                  affectedCardIds: [nextCenterId],
+                  source: 'turn-refill',
+                  reason: 'populate-center',
+                  visibility: 'public',
+                  summary: `Turn ${turn} Center revealed: ${state.cards[nextCenterId]!.label}.`,
+                  payload: { from: 'days', to: 'center' }
+                })
+              );
+            }
           } else {
-            phase = 'READY_TO_END_TURN';
+            const postOutcome = evaluateCompletion(players, days, boardCenter, state.ruleset);
+            if (postOutcome) {
+              phase = 'GAME_OVER';
+              currentReading = null;
+              newEvents.push(
+                makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
+                  actor: 'system',
+                  type: 'GameCompleted',
+                  affectedCardIds: [],
+                  source: 'EndTurn',
+                  reason: postOutcome.reason,
+                  visibility: 'public',
+                  summary: postOutcome.summary,
+                  payload: { ...postOutcome }
+                })
+              );
+            } else {
+              phase = 'READY_TO_END_TURN';
+            }
           }
         }
 
@@ -1081,7 +1295,7 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
     }
   }
 
-  let outcome: GameOutcome | undefined = state.outcome;
+  let outcome: GameOutcome | undefined = comboOutcome ?? state.outcome;
   if (phase !== 'GAME_OVER') {
     const midOutcome = evaluateCompletion(players, days, boardCenter, state.ruleset);
     if (midOutcome && midOutcome.reason === 'target_rank_reached') {
@@ -1102,7 +1316,7 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
       );
     }
   } else {
-    outcome = evaluateCompletion(players, days, boardCenter, state.ruleset);
+    outcome = comboOutcome ?? evaluateCompletion(players, days, boardCenter, state.ruleset);
   }
 
   const allEvents = [...state.events, ...newEvents];
@@ -1128,6 +1342,7 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
     discardedCenterThisTurn,
     currentReading,
     readingHistory,
+    majorPending,
     players,
     status: outcome ? 'completed' : 'playing',
     outcome,

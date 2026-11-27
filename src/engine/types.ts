@@ -18,9 +18,10 @@ export type Zone =
   | 'reserve';
 
 export type ElementalTargetZone = 'days' | 'board' | 'board_and_days' | 'veil';
-export type BoardTargetSlot = 'event' | 'center';
+export type BoardTargetSlot = 'event' | 'center' | 'parallel';
 export type WaterResurfaceDestination = 'shuffled' | 'top' | 'bottom';
 export type ReaderBonusPolicy = 'record_only' | 'free_tier1_elemental_next_turn';
+export type ElementalTimingPolicy = 'after_encounter' | 'before_reading';
 
 export type EvolutionColorPolicy = 'same-color' | 'same-element' | 'any';
 export type EvolutionTieBreakPolicy =
@@ -101,6 +102,7 @@ export interface Ruleset {
   readonly readerBonusPolicy: ReaderBonusPolicy; // Provisional in D1: record_only (MC) | free_tier1_elemental_next_turn (D1)
   readonly readerBonusConsumesTurnAction: boolean; // Provisional: true (1 elemental action budget per turn)
   readonly rotateEventOnCenterDiscard: boolean; // Provisional: false (MC baseline) | true (D1 cleanup rotation)
+  readonly elementalTiming: ElementalTimingPolicy; // 'after_encounter' (D1 baseline) | 'before_reading' (E default)
   readonly elementalNativePrimaryBonusVP: number; // Provisional: 0 (uses exact card VP 1/2/3 by default)
   readonly waterResurfaceDestination: WaterResurfaceDestination; // Provisional: 'shuffled' | 'top' | 'bottom'
   readonly trialTargetElement: 'event' | 'center'; // Provisional default: 'event' (Left Event defines obstacle)
@@ -145,6 +147,7 @@ export interface PlayerState {
   readonly hand: readonly string[];
   readonly championCardId?: string;
   readonly eclipseCount: number;
+  readonly eclipseBonusVP: number; // Persistent Court/Champion VP bonus from completed Eclipses
   readonly effectUsedThisTurn: boolean;
   readonly secondaryElement?: Element; // Reserved, inactive in D1
   readonly pendingReaderBonuses: readonly PendingReaderBonus[];
@@ -245,6 +248,10 @@ export type GameEventType =
   | 'ReaderBonusExpired'
   | 'ElementalEffectActivated'
   | 'ElementalEffectResolved'
+  | 'MajorArrived'
+  | 'MajorActivated'
+  | 'EclipseFormed'
+  | 'TriangulationCompleted'
   | 'CenterClaimed'
   | 'LineageEvolved'
   | 'EvolutionChainCompleted'
@@ -324,6 +331,7 @@ export type Command =
   | { readonly type: 'ClaimCenterCard'; readonly playerId: string }
   | { readonly type: 'DiscardCenterCard'; readonly playerId: string }
   // Hand & turn management
+  | { readonly type: 'AdvanceToReading'; readonly playerId: string }
   | { readonly type: 'DiscardHandCard'; readonly playerId: string; readonly cardId: string }
   | { readonly type: 'EndTurn'; readonly playerId: string }
   // Milestone D1: Elemental hand effects (AGREED cost: consumes hand card -> Veil) & provisional Reader Bonus
@@ -360,7 +368,7 @@ export interface RejectedCommandRecord {
 }
 
 export interface GameOutcome {
-  readonly reason: 'target_rank_reached' | 'days_exhausted';
+  readonly reason: 'target_rank_reached' | 'days_exhausted' | 'eclipse_victory' | 'triangulation_victory';
   readonly winnerIds: readonly string[];
   readonly highestRank: number;
   readonly summary: string;
@@ -456,6 +464,7 @@ export interface ProjectedPlayerView {
   readonly handCount: number;
   readonly hand: readonly Card[] | null;
   readonly eclipseCount: number;
+  readonly eclipseBonusVP: number;
   readonly effectUsedThisTurn: boolean;
   readonly pendingReaderBonusCount: number;
   readonly availableReaderBonusCount: number;

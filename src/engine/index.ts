@@ -10,6 +10,7 @@ export * from './event-helpers.js';
 export * from './readings.js';
 export * from './setup.js';
 export * from './elemental-effects.js';
+export * from './majors.js';
 export * from './visibility.js';
 export * from './formatters.js';
 export * from './reducer.js';

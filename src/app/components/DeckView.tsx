@@ -26,7 +26,9 @@ export function DeckView({ view, viewer }: { view: ProjectedGameView; viewer: Vi
           <div className="metric-label">Total Cards</div>
           <div className="metric-value">{view.deckComponents.length}</div>
           <div className="brand-sub">
-            4 suits × Ranks A–{view.ruleset.maxMinorRank} (No 10s, No Courts until Milestone E)
+            {view.ruleset.includeCourts
+              ? `4 suits × Ranks A–${view.ruleset.maxMinorRank} + 12 Classic Courts (J/Q/K = Major Arcana)`
+              : `4 suits × Ranks A–${view.ruleset.maxMinorRank} (No Courts in this preset)`}
           </div>
         </div>
         <div className="metric-box">
@@ -65,7 +67,10 @@ export function DeckView({ view, viewer }: { view: ProjectedGameView; viewer: Vi
               {suitCards.map(({ card, knownLocation }) => (
                 <div key={card.id} className="deck-row">
                   <span>
-                    <strong>{card.shortLabel}</strong> {card.label} ({card.vp} VP)
+                    <strong>{card.shortLabel}</strong> {card.label}{' '}
+                    {card.family === 'classic-court'
+                      ? `(Major · +${card.courtBonus ?? 1} Court)`
+                      : `(${card.vp} VP)`}
                   </span>
                   <span className="brand-sub">{knownLocation}</span>
                 </div>

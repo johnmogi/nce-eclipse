@@ -14,6 +14,8 @@ import type {
  * 1 VP (1–3) -> Trial
  */
 export function eventCardToReality(eventCard: Card): EventReality {
+  // Classic Court occupying Left Event acts as an open Treasure channel while standing on the Board
+  if (eventCard.family === 'classic-court') return 'treasure';
   if (eventCard.vp >= 3) return 'treasure';
   if (eventCard.vp === 2) return 'barrier';
   return 'trial';
@@ -29,7 +31,7 @@ export function evaluateReconciliation(params: {
 }): ReconciliationBreakdown {
   const { player, eventCard, centerCard, sacrificeCardIds, cards, ruleset } = params;
   const reality = eventCardToReality(eventCard);
-  const lineageVP = rankToVP(player.lineage.rank);
+  const lineageVP = rankToVP(player.lineage.rank) + (player.eclipseBonusVP ?? 0);
   const lineageTopId = player.lineage.cardIds[player.lineage.cardIds.length - 1]!;
   const lineageTopCard = cards[lineageTopId]!;
   const sacrificedCards = sacrificeCardIds

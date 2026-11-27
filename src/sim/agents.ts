@@ -220,7 +220,9 @@ function chooseElementalAction(state: GameState, player: PlayerState): Command {
     }
   }
 
-  return { type: 'EndTurn', playerId };
+  return state.ruleset.elementalTiming === 'before_reading'
+    ? { type: 'AdvanceToReading', playerId }
+    : { type: 'EndTurn', playerId };
 }
 
 export function chooseReaderAdvice(state: GameState, policy: AgentPolicyId): ReadingAdvice {

@@ -64,6 +64,7 @@ describe('Milestone D1.1 — Direct Card-to-Zone Elemental UI Targeting', () => 
       days: false,
       boardEvent: false,
       boardCenter: false,
+      boardParallel: false,
       veil: true
     });
     // Activating Water card cannot be in eligible Veil targets

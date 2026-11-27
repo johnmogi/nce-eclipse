@@ -26,6 +26,8 @@ export interface ElementalMutableContext {
   veil: string[];
   boardEvent: string[];
   boardCenter: string[];
+  boardParallel: string[];
+  majorPending: { readonly cardId: string; readonly dormantUntilTurn: number }[];
   eventRevealed: boolean;
   centerRevealed: boolean;
   centerAbandoned: boolean;
@@ -97,12 +99,13 @@ type ValidatedPlan = ValidatedAirPlan | ValidatedFirePlan | ValidatedWaterPlan |
 function resolveSelectedBoardSlots(
   payload: ElementalEffectPayload,
   boardEvent: readonly string[],
-  boardCenter: readonly string[]
+  boardCenter: readonly string[],
+  boardParallel: readonly string[]
 ): { ok: true; slots: BoardTargetSlot[] } | { ok: false; error: ValidationError } {
   if (payload.targetBoardSlots && payload.targetBoardSlots.length > 0) {
     const unique: BoardTargetSlot[] = [];
     for (const slot of payload.targetBoardSlots) {
-      if (slot !== 'event' && slot !== 'center') {
+      if (slot !== 'event' && slot !== 'center' && slot !== 'parallel') {
         return {
           ok: false,
           error: { code: 'INVALID_TARGET_SELECTION', message: `Unsupported board slot "${String(slot)}".` }
@@ -124,6 +127,12 @@ function resolveSelectedBoardSlots(
         return {
           ok: false,
           error: { code: 'INSUFFICIENT_TARGET_CARDS', message: 'Center slot is empty.' }
+        };
+      }
+      if (slot === 'parallel' && boardParallel.length === 0) {
+        return {
+          ok: false,
+          error: { code: 'INSUFFICIENT_TARGET_CARDS', message: 'Right Parallel slot is empty.' }
         };
       }
       unique.push(slot);
@@ -150,12 +159,20 @@ function resolveSelectedBoardSlots(
           };
         }
         unique.push('center');
+      } else if (boardParallel[0] === id) {
+        if (unique.includes('parallel')) {
+          return {
+            ok: false,
+            error: { code: 'INVALID_TARGET_SELECTION', message: `Duplicate board target "${id}".` }
+          };
+        }
+        unique.push('parallel');
       } else {
         return {
           ok: false,
           error: {
             code: 'INVALID_TARGET_SELECTION',
-            message: `Card "${id}" is not currently on the Board (Event/Center).`
+            message: `Card "${id}" is not currently on the Board (Event/Center/Parallel).`
           }
         };
       }
@@ -196,8 +213,9 @@ function validateElementalPlan(params: {
   veil: readonly string[];
   boardEvent: readonly string[];
   boardCenter: readonly string[];
+  boardParallel: readonly string[];
 }): { ok: true; plan: ValidatedPlan } | { ok: false; error: ValidationError } {
-  const { element, strength, payload, excludedVeilCardId, days, veil, boardEvent, boardCenter } = params;
+  const { element, strength, payload, excludedVeilCardId, days, veil, boardEvent, boardCenter, boardParallel } = params;
 
   if (element === 'water') {
     if (payload.targetZone !== 'veil') {
@@ -281,7 +299,7 @@ function validateElementalPlan(params: {
     const slotRes =
       payload.targetZone === 'days'
         ? { ok: true as const, slots: [] as BoardTargetSlot[] }
-        : resolveSelectedBoardSlots(payload, boardEvent, boardCenter);
+        : resolveSelectedBoardSlots(payload, boardEvent, boardCenter, boardParallel);
     if (!slotRes.ok) return slotRes;
     const boardSlots = slotRes.slots;
 
@@ -533,7 +551,7 @@ function validateElementalPlan(params: {
   }
 
   if (payload.targetZone === 'board') {
-    const slotRes = resolveSelectedBoardSlots(payload, boardEvent, boardCenter);
+    const slotRes = resolveSelectedBoardSlots(payload, boardEvent, boardCenter, boardParallel);
     if (!slotRes.ok) return slotRes;
     const boardSlots = slotRes.slots;
 
@@ -590,7 +608,7 @@ function validateElementalPlan(params: {
   }
 
   // Earth board_and_days
-  const slotRes = resolveSelectedBoardSlots(payload, boardEvent, boardCenter);
+  const slotRes = resolveSelectedBoardSlots(payload, boardEvent, boardCenter, boardParallel);
   if (!slotRes.ok) return slotRes;
   const boardSlots = slotRes.slots;
   const daysCount = payload.daysCount ?? 0;
@@ -624,7 +642,9 @@ function validateElementalPlan(params: {
     };
   }
 
-  const currentBoardIds = boardSlots.map((slot) => (slot === 'event' ? boardEvent[0]! : boardCenter[0]!));
+  const currentBoardIds = boardSlots.map((slot) =>
+    slot === 'event' ? boardEvent[0]! : slot === 'center' ? boardCenter[0]! : boardParallel[0]!
+  );
   const currentDaysIds = days.slice(0, daysCount);
   const currentCombined = [...currentBoardIds, ...currentDaysIds];
 
@@ -693,13 +713,20 @@ function executeValidatedPlan(
       const cardId = ctx.boardEvent.shift()!;
       const wasPublic = ctx.eventRevealed;
       ctx.eventRevealed = false;
+      ctx.majorPending = ctx.majorPending.filter((p) => p.cardId !== cardId);
       return { cardId, wasPublic };
+    }
+    if (slot === 'parallel') {
+      const cardId = ctx.boardParallel.shift()!;
+      ctx.majorPending = ctx.majorPending.filter((p) => p.cardId !== cardId);
+      return { cardId, wasPublic: true };
     }
     const cardId = ctx.boardCenter.shift()!;
     const wasPublic = ctx.centerRevealed;
     ctx.centerRevealed = false;
     ctx.centerAbandoned = false;
     ctx.abandonedByPlayerId = null;
+    ctx.majorPending = ctx.majorPending.filter((p) => p.cardId !== cardId);
     return { cardId, wasPublic };
   };
 
@@ -1014,6 +1041,8 @@ function executeValidatedPlan(
       if (slot === 'event') {
         ctx.boardEvent = [newBoardCards[idx]!];
         ctx.eventRevealed = false;
+      } else if (slot === 'parallel') {
+        ctx.boardParallel = [newBoardCards[idx]!];
       } else {
         ctx.boardCenter = [newBoardCards[idx]!];
         ctx.centerRevealed = false;
@@ -1153,7 +1182,8 @@ export function validateAndExecuteElementalEffect(
     days: ctx.days,
     veil: ctx.veil,
     boardEvent: ctx.boardEvent,
-    boardCenter: ctx.boardCenter
+    boardCenter: ctx.boardCenter,
+    boardParallel: ctx.boardParallel
   });
 
   if (!planRes.ok) {
@@ -1310,7 +1340,8 @@ export function validateAndExecuteReaderBonus(
     days: ctx.days,
     veil: ctx.veil,
     boardEvent: ctx.boardEvent,
-    boardCenter: ctx.boardCenter
+    boardCenter: ctx.boardCenter,
+    boardParallel: ctx.boardParallel
   });
 
   if (!planRes.ok) {

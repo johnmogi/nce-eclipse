@@ -5,6 +5,11 @@ import {
   finalizeState,
   makeEvent
 } from './event-helpers.js';
+import {
+  drawNextMinorRoutingMajors,
+  isMajorCard,
+  type MajorMutableBoard
+} from './majors.js';
 import { createReadingForTurn } from './readings.js';
 import { eventCardToReality } from './reconciliation.js';
 import { deterministicShuffle, seedToUint32 } from './rng.js';
@@ -13,16 +18,17 @@ import type {
   CreateGameOptions,
   Element,
   GameEvent,
+  GameOutcome,
   GamePhase,
   GameState,
+  MajorPendingEntry,
   PlayerState,
   ReadingRecord,
   Ruleset
 } from './types.js';
 
 /**
- * Pure deterministic game initializer.
- * Supports optional deterministic card-placement overrides for acceptance scenarios.
+ * Pure deterministic game initializer supporting Milestones A–E.
  */
 export function createGame(
   ruleset: Ruleset,
@@ -73,6 +79,7 @@ export function createGame(
       },
       hand: [],
       eclipseCount: 0,
+      eclipseBonusVP: 0,
       effectUsedThisTurn: false,
       pendingReaderBonuses: [],
       evolutionsCompleted: 0,
@@ -127,9 +134,14 @@ export function createGame(
     return seqCounter;
   };
 
-  const initialOpenPhase: GamePhase = ruleset.features.readings
-    ? 'AWAITING_READING'
-    : 'AWAITING_CENTER_DECISION';
+  const preReadingElemental =
+    ruleset.features.elementalEffects && ruleset.elementalTiming === 'before_reading';
+
+  const initialOpenPhase: GamePhase = preReadingElemental
+    ? 'AWAITING_ELEMENTAL_ACTION'
+    : ruleset.features.readings
+      ? 'AWAITING_READING'
+      : 'AWAITING_CENTER_DECISION';
 
   const events: GameEvent[] = [
     makeEvent(nextSeq(), 1, 1, initialOpenPhase, ruleset.version, {
@@ -144,14 +156,28 @@ export function createGame(
     })
   ];
 
-  // Deal starting hands (override or drawn from Days)
+  // Deal starting hands: Minors only (Majors/Courts stay in Deck of Days to enter via Board!)
   for (let i = 0; i < players.length; i++) {
     const dealt: string[] = [];
     if (options.overrideHands?.[i]) {
       dealt.push(...options.overrideHands[i]!);
     } else {
-      for (let c = 0; c < ruleset.startingHandSize && days.length > 0; c++) {
-        dealt.push(days.shift()!);
+      const skippedMajors: string[] = [];
+      while (dealt.length < ruleset.startingHandSize && days.length > 0) {
+        const candidateId = days.shift()!;
+        const candidate = catalog[candidateId]!;
+        if (ruleset.features.majors && isMajorCard(candidate)) {
+          skippedMajors.push(candidateId);
+        } else {
+          dealt.push(candidateId);
+        }
+      }
+      if (skippedMajors.length > 0) {
+        // Re-insert any skipped Majors cleanly into Days deterministically
+        const recombined = [...skippedMajors, ...days];
+        const reshuffled = deterministicShuffle(recombined, rngState);
+        rngState = reshuffled.nextState;
+        days.splice(0, days.length, ...reshuffled.shuffled);
       }
     }
     players[i] = { ...players[i]!, hand: dealt };
@@ -185,102 +211,138 @@ export function createGame(
     events.push(...evo.events);
   }
 
-  // Populate Turn 1 Board: Left Event (concealed until Center pursued) + Center (concealed for Reading)
-  const boardEvent: string[] = [];
-  let eventRevealed = false;
-  if (ruleset.features.barriersAndTrials && days.length > 0 && ruleset.boardOccupancyLimits.event >= 1) {
-    const firstEventId = days.shift()!;
-    const firstEventCard = catalog[firstEventId]!;
-    boardEvent.push(firstEventId);
-    eventRevealed = false;
+  // Populate Turn 1 Board (routing any drawn Major Arcana / Courts cleanly to Parallel -> Event -> Center!)
+  const majorBoardCtx: MajorMutableBoard = {
+    cards: catalog,
+    ruleset,
+    turn: 1,
+    round: 1,
+    phase: initialOpenPhase,
+    activePlayerIndex: 0,
+    players,
+    days,
+    veil,
+    boardEvent: [],
+    boardCenter: [],
+    boardParallel: [],
+    eventRevealed: false,
+    centerRevealed: !ruleset.features.readings,
+    centerAbandoned: false,
+    abandonedByPlayerId: null,
+    majorPending: [] as MajorPendingEntry[],
+    newEvents: events,
+    nextSeq
+  };
 
-    events.push(
-      makeEvent(nextSeq(), 1, 1, initialOpenPhase, ruleset.version, {
-        actor: 'system',
-        type: 'CardMoved',
-        affectedCardIds: [],
-        source: 'turn-setup',
-        reason: 'populate-event-concealed',
-        visibility: 'public',
-        summary: `Turn 1 Event card placed face-down in Left slot (${firstEventCard.backGroup} back).`,
-        payload: { from: 'days', to: 'event', concealed: true }
-      })
-    );
-    events.push(
-      makeEvent(nextSeq(), 1, 1, initialOpenPhase, ruleset.version, {
-        actor: 'system',
-        type: 'CardMoved',
-        affectedCardIds: [firstEventId],
-        source: 'turn-setup',
-        reason: 'populate-event-admin-detail',
-        visibility: 'admin_only',
-        summary: `[Admin] Turn 1 concealed Left Event is ${firstEventCard.label} (${eventCardToReality(firstEventCard)}, ${firstEventCard.vp} VP).`,
-        payload: { from: 'days', to: 'event', cardId: firstEventId }
-      })
-    );
-  }
+  let comboOutcome: GameOutcome | undefined;
 
-  const boardCenter: string[] = [];
-  let centerRevealed = !ruleset.features.readings;
-  let currentReading: ReadingRecord | null = null;
+  if (ruleset.features.barriersAndTrials && majorBoardCtx.days.length > 0 && ruleset.boardOccupancyLimits.event >= 1) {
+    const drawEv = drawNextMinorRoutingMajors(majorBoardCtx, 'event', 'turn-setup');
+    comboOutcome = drawEv.outcome;
+    if (!comboOutcome && drawEv.minorCardId) {
+      const firstEventId = drawEv.minorCardId;
+      const firstEventCard = catalog[firstEventId]!;
+      majorBoardCtx.boardEvent.push(firstEventId);
+      majorBoardCtx.eventRevealed = false;
 
-  if (days.length > 0 && ruleset.boardOccupancyLimits.center >= 1) {
-    const firstCenterId = days.shift()!;
-    const firstCenterCard = catalog[firstCenterId]!;
-    boardCenter.push(firstCenterId);
-
-    if (ruleset.features.readings) {
-      centerRevealed = false;
-      currentReading = createReadingForTurn(players, 0, firstCenterCard, 1, 1, ruleset);
       events.push(
-        makeEvent(nextSeq(), 1, 1, 'AWAITING_READING', ruleset.version, {
+        makeEvent(nextSeq(), 1, 1, initialOpenPhase, ruleset.version, {
           actor: 'system',
           type: 'CardMoved',
           affectedCardIds: [],
           source: 'turn-setup',
-          reason: 'populate-center-concealed',
+          reason: 'populate-event-concealed',
           visibility: 'public',
-          summary: `Turn 1 concealed card placed in Center (${firstCenterCard.backGroup} back). Waiting for ${players[1]!.name}'s reading.`,
-          payload: { from: 'days', to: 'center', concealed: true, backGroup: firstCenterCard.backGroup }
+          summary: `Turn 1 Event card placed face-down in Left slot (${firstEventCard.backGroup} back).`,
+          payload: { from: 'days', to: 'event', concealed: true }
         })
       );
       events.push(
-        makeEvent(nextSeq(), 1, 1, 'AWAITING_READING', ruleset.version, {
+        makeEvent(nextSeq(), 1, 1, initialOpenPhase, ruleset.version, {
           actor: 'system',
           type: 'CardMoved',
-          affectedCardIds: [firstCenterId],
+          affectedCardIds: [firstEventId],
           source: 'turn-setup',
-          reason: 'populate-center-admin-detail',
+          reason: 'populate-event-admin-detail',
           visibility: 'admin_only',
-          summary: `[Admin] Turn 1 concealed Center card is ${firstCenterCard.label}.`,
-          payload: { from: 'days', to: 'center', cardId: firstCenterId }
-        })
-      );
-    } else {
-      centerRevealed = true;
-      events.push(
-        makeEvent(nextSeq(), 1, 1, 'AWAITING_CENTER_DECISION', ruleset.version, {
-          actor: 'system',
-          type: 'CardMoved',
-          affectedCardIds: [firstCenterId],
-          source: 'turn-setup',
-          reason: 'populate-center',
-          visibility: 'public',
-          summary: `Turn 1 Center revealed: ${firstCenterCard.label}.`,
-          payload: { from: 'days', to: 'center' }
+          summary: `[Admin] Turn 1 concealed Left Event is ${firstEventCard.label} (${eventCardToReality(firstEventCard)}, ${firstEventCard.vp} VP).`,
+          payload: { from: 'days', to: 'event', cardId: firstEventId }
         })
       );
     }
   }
 
-  const outcome = evaluateCompletion(players, days, boardCenter, ruleset);
+  let currentReading: ReadingRecord | null = null;
+
+  if (!comboOutcome && majorBoardCtx.days.length > 0 && ruleset.boardOccupancyLimits.center >= 1) {
+    const drawCtr = drawNextMinorRoutingMajors(majorBoardCtx, 'center', 'turn-setup');
+    comboOutcome = drawCtr.outcome;
+    if (!comboOutcome && drawCtr.minorCardId) {
+      const firstCenterId = drawCtr.minorCardId;
+      const firstCenterCard = catalog[firstCenterId]!;
+      majorBoardCtx.boardCenter.push(firstCenterId);
+
+      if (ruleset.features.readings) {
+        majorBoardCtx.centerRevealed = false;
+        if (!preReadingElemental) {
+          currentReading = createReadingForTurn(players, 0, firstCenterCard, 1, 1, ruleset);
+        }
+        events.push(
+          makeEvent(nextSeq(), 1, 1, initialOpenPhase, ruleset.version, {
+            actor: 'system',
+            type: 'CardMoved',
+            affectedCardIds: [],
+            source: 'turn-setup',
+            reason: 'populate-center-concealed',
+            visibility: 'public',
+            summary: preReadingElemental
+              ? `Turn 1 concealed card placed in Center (${firstCenterCard.backGroup} back). Optional Elemental Prep open before Reading.`
+              : `Turn 1 concealed card placed in Center (${firstCenterCard.backGroup} back). Waiting for ${players[1]!.name}'s reading.`,
+            payload: { from: 'days', to: 'center', concealed: true, backGroup: firstCenterCard.backGroup }
+          })
+        );
+        events.push(
+          makeEvent(nextSeq(), 1, 1, initialOpenPhase, ruleset.version, {
+            actor: 'system',
+            type: 'CardMoved',
+            affectedCardIds: [firstCenterId],
+            source: 'turn-setup',
+            reason: 'populate-center-admin-detail',
+            visibility: 'admin_only',
+            summary: `[Admin] Turn 1 concealed Center card is ${firstCenterCard.label}.`,
+            payload: { from: 'days', to: 'center', cardId: firstCenterId }
+          })
+        );
+      } else {
+        majorBoardCtx.centerRevealed = true;
+        events.push(
+          makeEvent(nextSeq(), 1, 1, 'AWAITING_CENTER_DECISION', ruleset.version, {
+            actor: 'system',
+            type: 'CardMoved',
+            affectedCardIds: [firstCenterId],
+            source: 'turn-setup',
+            reason: 'populate-center',
+            visibility: 'public',
+            summary: `Turn 1 Center revealed: ${firstCenterCard.label}.`,
+            payload: { from: 'days', to: 'center' }
+          })
+        );
+      }
+    }
+  }
+
+  const outcome =
+    comboOutcome ?? evaluateCompletion(players, majorBoardCtx.days, majorBoardCtx.boardCenter, ruleset);
+
   const phase: GamePhase = outcome
     ? 'GAME_OVER'
-    : boardCenter.length === 0
+    : majorBoardCtx.boardCenter.length === 0
       ? 'READY_TO_END_TURN'
-      : ruleset.features.readings
-        ? 'AWAITING_READING'
-        : 'AWAITING_CENTER_DECISION';
+      : preReadingElemental
+        ? 'AWAITING_ELEMENTAL_ACTION'
+        : ruleset.features.readings
+          ? 'AWAITING_READING'
+          : 'AWAITING_CENTER_DECISION';
 
   if (outcome) {
     currentReading = null;
@@ -322,18 +384,22 @@ export function createGame(
     turn: 1,
     activePlayerIndex: 0,
     activePlayerId: players[0]!.id,
-    days,
-    veil,
+    days: majorBoardCtx.days,
+    veil: majorBoardCtx.veil,
     reserve,
-    board: { event: boardEvent, center: boardCenter, parallel: [] },
-    eventRevealed,
-    centerRevealed,
-    centerAbandoned: false,
-    abandonedByPlayerId: null,
+    board: {
+      event: majorBoardCtx.boardEvent,
+      center: majorBoardCtx.boardCenter,
+      parallel: majorBoardCtx.boardParallel
+    },
+    eventRevealed: majorBoardCtx.eventRevealed,
+    centerRevealed: majorBoardCtx.centerRevealed,
+    centerAbandoned: majorBoardCtx.centerAbandoned,
+    abandonedByPlayerId: majorBoardCtx.abandonedByPlayerId,
     discardedCenterThisTurn: false,
     currentReading,
     readingHistory: [],
-    majorPending: [],
+    majorPending: majorBoardCtx.majorPending,
     players,
     activeEffects: [],
     connections: [],

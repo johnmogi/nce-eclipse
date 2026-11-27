@@ -1,6 +1,6 @@
 import type { Ruleset, RuleStatus } from './types.js';
 
-export const ENGINE_VERSION = '0.4.0-md1';
+export const ENGINE_VERSION = '0.5.0-me';
 
 const INACTIVE_FUTURE_FEATURES = {
   readings: false,
@@ -31,10 +31,18 @@ const MILESTONE_D1_FEATURES = {
   elementalEffects: true
 } as const;
 
+const MILESTONE_E_FEATURES = {
+  ...MILESTONE_D1_FEATURES,
+  majors: true,
+  eclipse: true,
+  triangulation: true
+} as const;
+
 const BASE_MC_DEFAULTS = {
   readerBonusPolicy: 'record_only' as const,
   readerBonusConsumesTurnAction: true,
   rotateEventOnCenterDiscard: false,
+  elementalTiming: 'after_encounter' as const,
   elementalNativePrimaryBonusVP: 0,
   waterResurfaceDestination: 'shuffled' as const
 };
@@ -43,11 +51,87 @@ const BASE_D1_DEFAULTS = {
   readerBonusPolicy: 'free_tier1_elemental_next_turn' as const,
   readerBonusConsumesTurnAction: true,
   rotateEventOnCenterDiscard: true,
+  elementalTiming: 'after_encounter' as const,
+  elementalNativePrimaryBonusVP: 0,
+  waterResurfaceDestination: 'shuffled' as const
+};
+
+const BASE_E_DEFAULTS = {
+  readerBonusPolicy: 'free_tier1_elemental_next_turn' as const,
+  readerBonusConsumesTurnAction: true,
+  rotateEventOnCenterDiscard: true,
+  elementalTiming: 'before_reading' as const,
   elementalNativePrimaryBonusVP: 0,
   waterResurfaceDestination: 'shuffled' as const
 };
 
 export const RULESET_PRESETS: Readonly<Record<string, Ruleset>> = {
+  'poker-proto-e': {
+    id: 'poker-proto-e',
+    version: '1.5.0',
+    name: 'Poker Prototype — Milestone E (48 Cards · Courts, Eclipse, Triangulation & Pre-Reading Prep)',
+    category: 'prototype',
+    description:
+      'Complete 48-card Bicycle/Poker Prototype: 36 Minors (Ace–9) + 12 Classic Court Major Arcana (Prince/Queen/King). Start-of-turn Elemental Prep BEFORE Reading, Parallel Dimension arrivals, Black+Red same-rank Eclipse (3 to win, +1/+2/+3 persistent VP), and 3-slot Triangulation victory.',
+    deckProfile: 'classic-48',
+    maxMinorRank: 9,
+    includeCourts: true,
+    playerCount: 2,
+    startingHandSize: 3,
+    maxHandSize: 5,
+    unusedAcesInDeck: false,
+    maxEffectiveVP: 3,
+    allowedEvolutionColors: 'same-color',
+    maxEvolutionJump: 2,
+    evolutionTieBreak: 'lowest-rank-same-element',
+    readingTierHintsEnabled: false,
+    readerBonusOnAbandon: false,
+    ...BASE_E_DEFAULTS,
+    trialTargetElement: 'event',
+    trialRequireAdvantage: true,
+    trialAdvantageBonusVP: 1,
+    sacrificeDestination: 'veil',
+    declinedAbandonedPolicy: 'send_to_veil',
+    marketFrequencyRounds: 0,
+    eclipseVictoryCount: 'players-plus-one',
+    l11TargetRank: 0,
+    stopOnTargetRank: false,
+    boardOccupancyLimits: { event: 1, center: 1, parallel: 1 },
+    features: MILESTONE_E_FEATURES
+  },
+  'poker-proto-e-quick': {
+    id: 'poker-proto-e-quick',
+    version: '1.5.0',
+    name: 'Poker Prototype — Milestone E Quick Eclipse (1 Eclipse or Triangulation Wins)',
+    category: 'prototype',
+    description:
+      '48-card Classic Courts prototype tuned for fast playtesting: first Eclipse or Triangulation wins immediately, with pre-reading Elemental Prep.',
+    deckProfile: 'classic-48',
+    maxMinorRank: 9,
+    includeCourts: true,
+    playerCount: 2,
+    startingHandSize: 3,
+    maxHandSize: 5,
+    unusedAcesInDeck: false,
+    maxEffectiveVP: 3,
+    allowedEvolutionColors: 'same-color',
+    maxEvolutionJump: 2,
+    evolutionTieBreak: 'lowest-rank-same-element',
+    readingTierHintsEnabled: false,
+    readerBonusOnAbandon: false,
+    ...BASE_E_DEFAULTS,
+    trialTargetElement: 'event',
+    trialRequireAdvantage: true,
+    trialAdvantageBonusVP: 1,
+    sacrificeDestination: 'veil',
+    declinedAbandonedPolicy: 'send_to_veil',
+    marketFrequencyRounds: 0,
+    eclipseVictoryCount: 1,
+    l11TargetRank: 0,
+    stopOnTargetRank: false,
+    boardOccupancyLimits: { event: 1, center: 1, parallel: 1 },
+    features: MILESTONE_E_FEATURES
+  },
   'poker-proto-d1': {
     id: 'poker-proto-d1',
     version: '1.4.0',

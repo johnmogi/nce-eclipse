@@ -43,6 +43,7 @@ export function computeStateHash(state: Omit<GameState, 'stateHash'>): string {
       hand: p.hand,
       championCardId: p.championCardId ?? null,
       eclipseCount: p.eclipseCount,
+      eclipseBonusVP: p.eclipseBonusVP,
       effectUsedThisTurn: p.effectUsedThisTurn,
       pendingReaderBonuses: p.pendingReaderBonuses,
       evolutionsCompleted: p.evolutionsCompleted,

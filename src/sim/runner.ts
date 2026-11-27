@@ -33,6 +33,8 @@ export interface SingleRunReport {
   readonly fireEffectsUsed: number;
   readonly waterEffectsUsed: number;
   readonly earthEffectsUsed: number;
+  readonly eclipsesFormed: number;
+  readonly triangulationsCompleted: number;
   readonly finalStateHash: string;
   readonly replayVerified: boolean;
   readonly invariantOk: boolean;
@@ -90,6 +92,9 @@ export interface BatchSimulationSummary {
   readonly totalFireEffects: number;
   readonly totalWaterEffects: number;
   readonly totalEarthEffects: number;
+  readonly totalEclipsesFormed: number;
+  readonly eclipseVictories: number;
+  readonly triangulationVictories: number;
   readonly byElement: readonly ElementSummary[];
   readonly sampleRuns: readonly SingleRunReport[];
 }
@@ -146,6 +151,8 @@ export function runSingleSimulation(
   const trialsPassed = state.events.filter((e) => e.type === 'TrialPassed').length;
   const centersAbandoned = state.events.filter((e) => e.type === 'CenterAbandoned').length;
   const abandonedClaimedFree = state.events.filter((e) => e.type === 'AbandonedCardClaimed').length;
+  const eclipsesFormed = state.events.filter((e) => e.type === 'EclipseFormed').length;
+  const triangulationsCompleted = state.events.filter((e) => e.type === 'TriangulationCompleted').length;
 
   let airEffectsUsed = 0;
   let fireEffectsUsed = 0;
@@ -191,6 +198,8 @@ export function runSingleSimulation(
     fireEffectsUsed,
     waterEffectsUsed,
     earthEffectsUsed,
+    eclipsesFormed,
+    triangulationsCompleted,
     finalStateHash: state.stateHash,
     replayVerified,
     invariantOk,
@@ -247,6 +256,9 @@ export function runSimulationBatch(params: {
   let totalFireEffects = 0;
   let totalWaterEffects = 0;
   let totalEarthEffects = 0;
+  let totalEclipsesFormed = 0;
+  let eclipseVictories = 0;
+  let triangulationVictories = 0;
 
   const elementStats: Record<Element, { appearances: number; rankSum: number; wins: number }> = {
     air: { appearances: 0, rankSum: 0, wins: 0 },
@@ -265,6 +277,8 @@ export function runSimulationBatch(params: {
 
     if (report.outcomeReason === 'target_rank_reached') targetReachedCount += 1;
     if (report.outcomeReason === 'days_exhausted') daysExhaustedCount += 1;
+    if (report.outcomeReason === 'eclipse_victory') eclipseVictories += 1;
+    if (report.outcomeReason === 'triangulation_victory') triangulationVictories += 1;
     if (!report.invariantOk) invariantFailures += 1;
     if (!report.replayVerified) replayFailures += 1;
 
@@ -294,6 +308,7 @@ export function runSimulationBatch(params: {
     totalFireEffects += report.fireEffectsUsed;
     totalWaterEffects += report.waterEffectsUsed;
     totalEarthEffects += report.earthEffectsUsed;
+    totalEclipsesFormed += report.eclipsesFormed;
 
     for (const pr of report.playerFinalRanks) {
       const bucket = elementStats[pr.primaryElement];
@@ -359,6 +374,9 @@ export function runSimulationBatch(params: {
     totalFireEffects,
     totalWaterEffects,
     totalEarthEffects,
+    totalEclipsesFormed,
+    eclipseVictories,
+    triangulationVictories,
     byElement,
     sampleRuns
   };

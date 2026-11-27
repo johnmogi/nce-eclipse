@@ -14,6 +14,7 @@ export function formatBatchAsText(summary: BatchSimulationSummary): string {
     `Event Realities:     Treasures ${summary.totalTreasures} | Barriers Passed ${summary.totalBarriersPassed} | Trials Passed ${summary.totalTrialsPassed}`,
     `Abandonment Loop:    Abandoned ${summary.totalAbandoned} | Claimed Free Next Turn ${summary.totalAbandonedClaimedFree}`,
     `Elemental Effects:   Air ${summary.totalAirEffects} | Fire ${summary.totalFireEffects} | Water ${summary.totalWaterEffects} | Earth ${summary.totalEarthEffects}`,
+    `Majors & Combos:     Eclipses ${summary.totalEclipsesFormed} (${summary.eclipseVictories} wins) | Triangulation Wins ${summary.triangulationVictories}`,
     `Integrity Gates:     ${summary.invariantFailures} invariant failures, ${summary.replayFailures} replay failures`,
     '------------------------------------------------------------',
     `Element Breakdown:`

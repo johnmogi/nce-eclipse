@@ -1493,3 +1493,8 @@ select {
   font-size: 11px;
   padding: 3px 8px;
 }
+
+.slot-major-card {
+  border-color: #b48bf5 !important;
+  box-shadow: 0 0 0 1px rgba(180, 139, 245, 0.45);
+}

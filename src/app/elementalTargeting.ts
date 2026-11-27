@@ -49,6 +49,7 @@ export interface ElementalTargetContext {
     readonly days: boolean;
     readonly boardEvent: boolean;
     readonly boardCenter: boolean;
+    readonly boardParallel: boolean;
     readonly veil: boolean;
   };
   readonly eligibleVeilCardIds: readonly string[];
@@ -60,7 +61,13 @@ export function getElementalTargetContext(
   activePlayer: ProjectedPlayerView,
   selection: ElementalSelectionState
 ): ElementalTargetContext {
-  const emptyZones = { days: false, boardEvent: false, boardCenter: false, veil: false };
+  const emptyZones = {
+    days: false,
+    boardEvent: false,
+    boardCenter: false,
+    boardParallel: false,
+    veil: false
+  };
   if (view.phase !== 'AWAITING_ELEMENTAL_ACTION' || !view.ruleset.features.elementalEffects) {
     return {
       activeElement: null,
@@ -117,6 +124,7 @@ export function getElementalTargetContext(
 
   const hasEvent = view.board.event.length > 0;
   const hasCenter = view.board.center.length > 0;
+  const hasParallel = view.board.parallel.length > 0;
 
   // AGREED D1 rule: activating Water card is strictly excluded from eligible Veil targets
   const eligibleVeilCardIds =
@@ -134,6 +142,7 @@ export function getElementalTargetContext(
         days: false,
         boardEvent: false,
         boardCenter: false,
+        boardParallel: false,
         veil: view.zoneAccess.canResurfaceFromVeil && eligibleVeilCardIds.length > 0
       },
       eligibleVeilCardIds: view.zoneAccess.canResurfaceFromVeil ? eligibleVeilCardIds : [],
@@ -151,6 +160,7 @@ export function getElementalTargetContext(
         days: view.zoneAccess.canManipulateDays && view.daysCount >= 2,
         boardEvent: hasEvent,
         boardCenter: hasCenter,
+        boardParallel: hasParallel,
         veil: false
       },
       eligibleVeilCardIds: [],
@@ -168,6 +178,7 @@ export function getElementalTargetContext(
         days: view.zoneAccess.canManipulateDays && view.daysCount >= 1,
         boardEvent: hasEvent,
         boardCenter: hasCenter,
+        boardParallel: hasParallel,
         veil: false
       },
       eligibleVeilCardIds: [],
@@ -185,6 +196,7 @@ export function getElementalTargetContext(
       days: view.zoneAccess.canManipulateDays && view.daysCount >= 2,
       boardEvent: hasEvent,
       boardCenter: hasCenter,
+      boardParallel: hasParallel,
       veil: false
     },
     eligibleVeilCardIds: [],
@@ -261,7 +273,12 @@ export function toggleBoardSlotSelection(
   ctx: ElementalTargetContext
 ): ElementalSelectionState {
   if (!ctx.activeElement || ctx.activeElement === 'water') return selection;
-  const eligible = slot === 'event' ? ctx.eligibleZones.boardEvent : ctx.eligibleZones.boardCenter;
+  const eligible =
+    slot === 'event'
+      ? ctx.eligibleZones.boardEvent
+      : slot === 'center'
+        ? ctx.eligibleZones.boardCenter
+        : ctx.eligibleZones.boardParallel;
   if (!eligible) return selection;
 
   const exists = selection.boardSlots.includes(slot);

@@ -71,7 +71,11 @@ export function getLegalActionsForState(state: GameState, viewer: Viewer): Comma
           actions.push('UseReaderBonus');
         }
       }
-      actions.push('EndTurn');
+      if (state.ruleset.elementalTiming === 'before_reading') {
+        actions.push('AdvanceToReading');
+      } else {
+        actions.push('EndTurn');
+      }
       return actions;
     }
     case 'READY_TO_END_TURN':
@@ -285,6 +289,7 @@ export function projectView(state: GameState, viewer: Viewer): ProjectedGameView
       handCount: p.hand.length,
       hand: canSeeHand ? mapCardIds(p.hand, state.cards) : null,
       eclipseCount: p.eclipseCount,
+      eclipseBonusVP: p.eclipseBonusVP,
       effectUsedThisTurn: p.effectUsedThisTurn,
       pendingReaderBonusCount: p.pendingReaderBonuses.filter(
         (b) => b.status === 'pending_spec' || b.status === 'available'

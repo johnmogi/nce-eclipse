@@ -47,8 +47,8 @@ import { loadActiveSession, saveActiveSession, type PersistedSession } from './s
 
 type ActiveTab = 'play' | 'deck' | 'rules' | 'lab';
 
-const DEFAULT_PRESET_ID = 'poker-proto-d1';
-const DEFAULT_SEED = 'eclipse-d1-001';
+const DEFAULT_PRESET_ID = 'poker-proto-e';
+const DEFAULT_SEED = 'eclipse-me-001';
 const HUMAN_PLAYER_ID = 'p1';
 
 function rulesetToDraft(r: Ruleset): RulesDraftState {
@@ -62,6 +62,7 @@ function rulesetToDraft(r: Ruleset): RulesDraftState {
     readerBonusPolicy: r.readerBonusPolicy,
     readerBonusConsumesTurnAction: r.readerBonusConsumesTurnAction,
     rotateEventOnCenterDiscard: r.rotateEventOnCenterDiscard,
+    elementalTiming: r.elementalTiming,
     waterResurfaceDestination: r.waterResurfaceDestination,
     elementalNativePrimaryBonusVP: r.elementalNativePrimaryBonusVP,
     trialTarget: r.trialTargetElement,
@@ -165,7 +166,7 @@ export function App() {
     void loadActiveSession().then((saved) => {
       if (cancelled) return;
       hydratedRef.current = true;
-      if (!saved || saved.ruleset.version !== '1.4.0' || saved.commands.length <= 1) return;
+      if (!saved || saved.ruleset.version !== '1.5.0' || saved.commands.length <= 1) return;
       // Never silently hijack a fresh Turn 1 opening with a stale mid-turn saved game;
       // offer an explicit one-click Resume banner instead.
       const rep = replay(saved.seed, saved.ruleset, saved.commands);
@@ -310,6 +311,7 @@ export function App() {
       },
       hand: activePlayer.hand ? activePlayer.hand.map((c) => c.id) : [],
       eclipseCount: activePlayer.eclipseCount,
+      eclipseBonusVP: activePlayer.eclipseBonusVP,
       effectUsedThisTurn: activePlayer.effectUsedThisTurn,
       pendingReaderBonuses: activePlayer.pendingReaderBonuses,
       evolutionsCompleted: activePlayer.evolutionsCompleted,
@@ -551,6 +553,7 @@ export function App() {
       readerBonusPolicy: rulesDraft.readerBonusPolicy,
       readerBonusConsumesTurnAction: rulesDraft.readerBonusConsumesTurnAction,
       rotateEventOnCenterDiscard: rulesDraft.rotateEventOnCenterDiscard,
+      elementalTiming: rulesDraft.elementalTiming,
       waterResurfaceDestination: rulesDraft.waterResurfaceDestination,
       elementalNativePrimaryBonusVP: rulesDraft.elementalNativePrimaryBonusVP,
       trialTargetElement: rulesDraft.trialTarget,

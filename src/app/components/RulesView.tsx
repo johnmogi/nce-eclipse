@@ -1,5 +1,6 @@
 import {
   RULE_ANNOTATIONS,
+  type ElementalTimingPolicy,
   type EvolutionColorPolicy,
   type EvolutionTieBreakPolicy,
   type GameState,
@@ -19,6 +20,7 @@ export interface RulesDraftState {
   readerBonusPolicy: ReaderBonusPolicy;
   readerBonusConsumesTurnAction: boolean;
   rotateEventOnCenterDiscard: boolean;
+  elementalTiming: ElementalTimingPolicy;
   waterResurfaceDestination: WaterResurfaceDestination;
   elementalNativePrimaryBonusVP: number;
   trialTarget: 'event' | 'center';
@@ -132,6 +134,20 @@ export function RulesView({
               <option value="shuffled">Shuffled into Deck of Days (Default)</option>
               <option value="top">Top of Deck of Days</option>
               <option value="bottom">Bottom of Deck of Days</option>
+            </select>
+          </div>
+
+          <div className="field">
+            <label>Elemental Action Timing</label>
+            <select
+              className="select"
+              value={draft.elementalTiming}
+              onChange={(e) =>
+                onChangeDraft({ elementalTiming: e.target.value as ElementalTimingPolicy })
+              }
+            >
+              <option value="before_reading">Before Reading (Start of Turn · Milestone E Default)</option>
+              <option value="after_encounter">After Encounter (Milestone D1 Baseline)</option>
             </select>
           </div>
 

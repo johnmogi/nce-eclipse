@@ -154,6 +154,16 @@ export function SimulationLabView({
               </div>
             </div>
             <div className="metric-box">
+              <div className="metric-label">Majors &amp; Combos (E)</div>
+              <div className="metric-value">
+                {simSummary.totalEclipsesFormed} Eclipses
+              </div>
+              <div className="brand-sub">
+                Eclipse wins: {simSummary.eclipseVictories} · Triangulation wins:{' '}
+                {simSummary.triangulationVictories}
+              </div>
+            </div>
+            <div className="metric-box">
               <div className="metric-label">Integrity Gates</div>
               <div className="metric-value">
                 {simSummary.invariantFailures === 0 && simSummary.replayFailures === 0

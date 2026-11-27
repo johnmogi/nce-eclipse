@@ -35,7 +35,24 @@ const ELEMENT_SHORT_VERB: Readonly<Record<Element, string>> = {
   earth: '♦ Reorder'
 };
 
-function getTurnProgressIndex(phase: GamePhase): number {
+function getTurnProgressIndex(phase: GamePhase, preReadingElemental: boolean): number {
+  if (preReadingElemental) {
+    switch (phase) {
+      case 'AWAITING_ELEMENTAL_ACTION':
+        return 0; // Elemental Prep
+      case 'AWAITING_ABANDONED_CHOICE':
+      case 'AWAITING_READING':
+      case 'AWAITING_READING_DECISION':
+        return 1; // Reading
+      case 'AWAITING_EVENT_RESOLUTION':
+      case 'AWAITING_CENTER_DECISION':
+      case 'AWAITING_HAND_DISCARD':
+        return 2; // Encounter
+      case 'READY_TO_END_TURN':
+      case 'GAME_OVER':
+        return 3; // End Turn
+    }
+  }
   switch (phase) {
     case 'AWAITING_ABANDONED_CHOICE':
     case 'AWAITING_READING':
@@ -53,10 +70,17 @@ function getTurnProgressIndex(phase: GamePhase): number {
   }
 }
 
-const TURN_STEPS = [
+const TURN_STEPS_POST = [
   { id: 'reading', label: '1. Reading' },
   { id: 'encounter', label: '2. Encounter' },
   { id: 'elemental', label: '3. Elemental Action' },
+  { id: 'end', label: '4. End Turn' }
+] as const;
+
+const TURN_STEPS_PRE = [
+  { id: 'elemental', label: '1. Elemental Prep' },
+  { id: 'reading', label: '2. Reading' },
+  { id: 'encounter', label: '3. Encounter' },
   { id: 'end', label: '4. End Turn' }
 ] as const;
 
@@ -140,7 +164,13 @@ export function GameTable({
   const daysClickable = isElementalWindow && elementalCtx.eligibleZones.days;
   const eventClickable = isElementalWindow && elementalCtx.eligibleZones.boardEvent;
   const centerClickable = isElementalWindow && elementalCtx.eligibleZones.boardCenter;
+  const parallelClickable = isElementalWindow && elementalCtx.eligibleZones.boardParallel;
   const veilHighlighted = isElementalWindow && elementalCtx.eligibleZones.veil;
+  const preReadingElemental = view.ruleset.elementalTiming === 'before_reading';
+  const requiredEclipses =
+    view.ruleset.eclipseVictoryCount === 'players-plus-one'
+      ? view.ruleset.playerCount + 1
+      : view.ruleset.eclipseVictoryCount;
 
   const topVeilCard = view.veil.length > 0 ? view.veil[view.veil.length - 1]! : null;
   const availableBonuses = activePlayer.pendingReaderBonuses.filter(
@@ -178,7 +208,8 @@ export function GameTable({
     Math.max(1, elementalCtx.strength - elementalSelection.boardSlots.length)
   );
 
-  const progressIndex = getTurnProgressIndex(view.phase);
+  const turnSteps = preReadingElemental ? TURN_STEPS_PRE : TURN_STEPS_POST;
+  const progressIndex = getTurnProgressIndex(view.phase, preReadingElemental);
 
   const getPlayerRoleTitle = (p: ProjectedPlayerView): string => {
     if (isHumanVsBot) {
@@ -318,12 +349,18 @@ export function GameTable({
                   </div>
                 </div>
 
-                {/* Public Stats: Hand Count (never reveals Bot hand) + Bonuses */}
+                {/* Public Stats: Hand Count + Eclipses + Bonuses */}
                 <div className="identity-meta-col">
                   <span className="badge">
                     Hand: {p.handCount}/{view.ruleset.maxHandSize}
                     {p.hand === null ? ' (Hidden)' : ''}
                   </span>
+                  {view.ruleset.features.eclipse && (
+                    <span className={`badge ${p.eclipseCount > 0 ? 'badge-warn' : ''}`}>
+                      ☀ Eclipse: {p.eclipseCount}/{requiredEclipses}
+                      {p.eclipseBonusVP > 0 ? ` (+${p.eclipseBonusVP} VP)` : ''}
+                    </span>
+                  )}
                   {p.availableReaderBonusCount > 0 ? (
                     <span className="badge badge-warn">
                       ★ {p.availableReaderBonusCount} Bonus Ready
@@ -461,11 +498,13 @@ export function GameTable({
                     >
                       <div className="mini-face-glyph">{item.card.shortLabel}</div>
                       <div className="mini-face-tag">
-                        {view.eventReality === 'treasure'
-                          ? 'Treasure'
-                          : view.eventReality === 'barrier'
-                            ? `Barrier ${item.card.vp}`
-                            : `Trial >${item.card.vp}`}
+                        {item.card.family === 'classic-court'
+                          ? `Major +${item.card.courtBonus ?? 1}`
+                          : view.eventReality === 'treasure'
+                            ? 'Treasure'
+                            : view.eventReality === 'barrier'
+                              ? `Barrier ${item.card.vp}`
+                              : `Trial >${item.card.vp}`}
                       </div>
                     </div>
                   )
@@ -532,11 +571,37 @@ export function GameTable({
               )}
             </div>
 
-            {/* RIGHT: PARALLEL DIMENSION */}
-            <div className="board-slot-card slot-parallel">
+            {/* RIGHT: PARALLEL DIMENSION (ACTIVE FOR CLASSIC COURTS / MAJOR ARCANA IN MILESTONE E) */}
+            <div
+              className={`board-slot-card ${
+                !view.ruleset.features.majors ? 'slot-parallel' : ''
+              } ${parallelClickable ? 'slot-target-eligible' : ''} ${
+                elementalSelection.boardSlots.includes('parallel') ? 'slot-target-selected' : ''
+              }`}
+              onClick={parallelClickable ? () => onClickBoardSlot('parallel') : undefined}
+              role={parallelClickable ? 'button' : undefined}
+              tabIndex={parallelClickable ? 0 : undefined}
+              onKeyDown={
+                parallelClickable
+                  ? (e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        onClickBoardSlot('parallel');
+                      }
+                    }
+                  : undefined
+              }
+            >
               <div className="slot-heading">Parallel</div>
               {view.board.parallel.length === 0 ? (
-                <div className="empty-card-outline sm" title="Major Arcana arrive in Milestone E">
+                <div
+                  className="empty-card-outline sm"
+                  title={
+                    view.ruleset.features.majors
+                      ? 'Arriving Major Arcana (Courts J/Q/K) enter here'
+                      : 'Major Arcana arrive in Milestone E'
+                  }
+                >
                   ◇
                 </div>
               ) : (
@@ -544,9 +609,18 @@ export function GameTable({
                   item.hidden ? (
                     <CardBack key={`par-back-${idx}`} backGroup={item.backGroup} size="sm" />
                   ) : (
-                    <div key={item.card.id} className="mini-face-card">
+                    <div
+                      key={item.card.id}
+                      className={`mini-face-card ${
+                        item.card.color === 'red' ? 'color-red' : 'color-black'
+                      } slot-major-card`}
+                    >
                       <div className="mini-face-glyph">{item.card.shortLabel}</div>
-                      <div className="mini-face-tag">Major</div>
+                      <div className="mini-face-tag">
+                        {item.card.family === 'classic-court'
+                          ? `Major +${item.card.courtBonus ?? 1}`
+                          : 'Major'}
+                      </div>
                     </div>
                   )
                 )
@@ -554,7 +628,7 @@ export function GameTable({
             </div>
           </div>
           <div className="table-zone-sub">
-            {eventClickable || centerClickable
+            {eventClickable || centerClickable || parallelClickable
               ? 'Click an occupied Board slot to target'
               : 'Encounter and reality'}
           </div>
@@ -625,7 +699,7 @@ export function GameTable({
       {/* Reading -> Encounter -> Elemental Action -> End Turn                  */}
       {/* ===================================================================== */}
       <div className="turn-stepper" aria-label="Turn progress">
-        {TURN_STEPS.map((step, idx) => {
+        {turnSteps.map((step, idx) => {
           const isCurrent = idx === progressIndex && view.status === 'playing';
           const isDone = idx < progressIndex || view.status === 'completed';
           return (
@@ -638,7 +712,7 @@ export function GameTable({
                 {isDone ? '✓ ' : ''}
                 {step.label}
               </span>
-              {idx < TURN_STEPS.length - 1 && (
+              {idx < turnSteps.length - 1 && (
                 <span className="turn-step-arrow" aria-hidden="true">
                   →
                 </span>
@@ -920,12 +994,16 @@ export function GameTable({
                 <h2 className="decision-title">
                   {activeElement
                     ? `${ELEMENT_META[activeElement].suitSymbol} ${ELEMENT_META[activeElement].label} (${elementalCtx.strength} VP)`
-                    : 'Your elemental action (Optional · 1 remaining)'}
+                    : preReadingElemental
+                      ? 'Start of Turn — Elemental Prep (Before Reading · Optional)'
+                      : 'Your elemental action (Optional · 1 remaining)'}
                 </h2>
                 <div className="brand-sub">
                   {activeElement
                     ? ELEMENT_VERB_HINT[activeElement]
-                    : 'Click any highlighted card in your hand below (consumes card → Veil), then click the highlighted Deck, Board, or Veil zone to confirm.'}
+                    : preReadingElemental
+                      ? 'Influence the Deck of Days, Shared Board (including Major Courts), or Veil BEFORE your Reading — or proceed straight to Reading.'
+                      : 'Click any highlighted card in your hand below (consumes card → Veil), then click the highlighted Deck, Board, or Veil zone to confirm.'}
                 </div>
               </div>
 
@@ -946,13 +1024,29 @@ export function GameTable({
                     </button>
                   </>
                 )}
-                <button
-                  className={`btn ${activeElement ? '' : 'btn-primary'}`}
-                  disabled={!canActAsActivePlayer}
-                  onClick={() => onSendCommand({ type: 'EndTurn', playerId: view.activePlayerId })}
-                >
-                  {activeElement ? 'Skip & End Turn →' : 'Finish Turn →'}
-                </button>
+                {preReadingElemental ? (
+                  <button
+                    className={`btn ${activeElement ? '' : 'btn-primary'}`}
+                    disabled={!canActAsActivePlayer}
+                    onClick={() =>
+                      onSendCommand({ type: 'AdvanceToReading', playerId: view.activePlayerId })
+                    }
+                  >
+                    {view.centerAbandoned
+                      ? 'Proceed to Abandoned Choice →'
+                      : 'Proceed to Reading →'}
+                  </button>
+                ) : (
+                  <button
+                    className={`btn ${activeElement ? '' : 'btn-primary'}`}
+                    disabled={!canActAsActivePlayer}
+                    onClick={() =>
+                      onSendCommand({ type: 'EndTurn', playerId: view.activePlayerId })
+                    }
+                  >
+                    {activeElement ? 'Skip & End Turn →' : 'Finish Turn →'}
+                  </button>
+                )}
               </div>
             </div>
 

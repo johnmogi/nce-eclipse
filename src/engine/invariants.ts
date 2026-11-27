@@ -38,7 +38,16 @@ export function checkInvariants(state: GameState): InvariantReport {
   for (const id of state.board.event) track(id, 'board.event');
   for (const id of state.board.center) track(id, 'board.center');
   for (const id of state.board.parallel) track(id, 'board.parallel');
-  for (const pending of state.majorPending) track(pending.cardId, 'majorPending');
+  // majorPending tracks dormancy metadata for Majors currently on the Board (not a separate physical zone)
+  for (const pending of state.majorPending) {
+    const onBoard =
+      state.board.parallel.includes(pending.cardId) ||
+      state.board.event.includes(pending.cardId) ||
+      state.board.center.includes(pending.cardId);
+    if (!onBoard) {
+      violations.push(`Dormant majorPending "${pending.cardId}" is not currently on the Board`);
+    }
+  }
 
   for (const player of state.players) {
     for (const id of player.hand) track(id, `player(${player.id}).hand`);
