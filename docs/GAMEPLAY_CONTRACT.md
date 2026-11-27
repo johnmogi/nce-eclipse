@@ -60,15 +60,13 @@
 
 1. **Primary Aces `[AGREED]`:** Each player begins with a distinct elemental Ace (`Rank 1`, `1 VP`) as their permanent primary identity (`primaryElement`, `primaryAceCard`). Unused Aces remain out of play in Reserve (`unusedAcesInDeck = false` `[PROVISIONAL]`).
 2. **Deck Shuffle `[AGREED]`:** Remaining cards are shuffled deterministically from `(ruleset.id, ruleset.version, seed)`.
-3. **Starting Hand Deal `[AGREED target / OPEN evolution interaction]`:**
-   - Each player is dealt **3 Minor cards** (`startingHandSize = 3`). Any Courts/Majors encountered during starting hand deal are re-shuffled back into Deck of Days so players never hold Majors in hand.
-   - **CRITICAL OPEN CONFLICT (`RD-01`):** Currently `setup.ts` runs mandatory chained evolution immediately on the dealt 3-card starting hand. On seeds like `eclipse-me-001`, all 3 cards (`3♠, 4♠, 6♣`) are immediately consumed into lineage before Turn 1, leaving Player 1 with **0 playable cards** while Bot holds 3. **Creator must approve `RD-01`** (e.g., refill hand back to 3 after setup evolution with a chain safeguard, or defer evolution until Turn 1).
-4. **Hand Size Limit `[OPEN — RD-02]`:**
-   - Currently `maxHandSize = 5` across presets (`[PROVISIONAL]`). Creator feedback on Turn 1 requested investigating `3` vs `5` as default hand limit. Requires explicit lock in `RD-02`.
-5. **Initial Board Setup `[AGREED 3-card start / OPEN slide rule RD-15]`:**
-   - **Default (`emptyChamberMode = false` `[AGREED]`):** Turn 1 populates **all 3 Board slots** (`Event`, `Center`, and `Parallel`) with 3 drawn cards so the Right chamber is not left empty.
-   - **Optional setting (`emptyChamberMode = true` `[PROVISIONAL]`):** Leaves Right Parallel vacant at setup and until a Major surfaces (configurable in Rules/Lab).
-   - **OPEN (`RD-15`):** Exact lifecycle of a Minor card sitting in the Right (`Parallel`) slot (e.g., face-down conveyor slide `Parallel → Center` vs `Parallel → Event` on turn refresh, and how arriving Majors interact with that slide) must be locked before R1/R2 implementation.
+3. **Starting Hand Deal `[PROVISIONAL DISTRIBUTION — RD-01]`:**
+   - Current R1 policy (`preventSetupEvolution = true`): Both players start at their Primary Aces (`Rank 1`) with **3 Minor cards**; any Major/Court or Minor that would immediately evolve the starting Ace is returned to Deck of Days and reshuffled.
+   - **Important statistical note `[PROVISIONAL]`:** Filtering out Rank `2–3` same-color cards alters the opening-hand probability distribution relative to a raw physical shuffle; awaiting creator confirmation in `RD-01` (Option B vs Option D).
+4. **Empty Veil & 3-Slot Turn-1 Board Invariant `[AGREED R1]`:**
+   - Normal new games start with **Veil = `0` cards (completely empty)** and **3 occupied Board slots** (`Event` concealed Minor, `Center` concealed Minor, `Parallel` 3rd card; `emptyChamberMode = false` default).
+5. **Hand Size Limit `[PROVISIONAL — RD-02]`:**
+   - Default `maxHandSize = 5` (`startingHandSize = 3`), configurable in Rules tab.
 
 ---
 

@@ -1,4 +1,5 @@
 import { buildCardCatalog, ELEMENTS } from './cards.js';
+import { hasAnyLegalElementalAction } from './elemental-effects.js';
 import {
   applyEvolutionWithEvents,
   evaluateCompletion,
@@ -424,11 +425,57 @@ export function createGame(
   const outcome =
     comboOutcome ?? evaluateCompletion(players, majorBoardCtx.days, majorBoardCtx.boardCenter, ruleset);
 
+  const canDoPreReadingElemental =
+    preReadingElemental &&
+    hasAnyLegalElementalAction({
+      player: players[0]!,
+      cards: catalog,
+      turn: 1,
+      ruleset,
+      daysCount: majorBoardCtx.days.length,
+      veilCount: majorBoardCtx.veil.length,
+      boardOccupiedCount:
+        majorBoardCtx.boardEvent.length +
+        majorBoardCtx.boardCenter.length +
+        majorBoardCtx.boardParallel.length
+    });
+
+  // If pre-reading elemental prep was skipped because NO legal elemental action exists,
+  // initialize Turn 1's Reading record cleanly so the turn opens directly at AWAITING_READING.
+  if (
+    !outcome &&
+    preReadingElemental &&
+    !canDoPreReadingElemental &&
+    ruleset.features.readings &&
+    majorBoardCtx.boardCenter.length > 0 &&
+    !currentReading
+  ) {
+    currentReading = createReadingForTurn(
+      players,
+      0,
+      catalog[majorBoardCtx.boardCenter[0]!]!,
+      1,
+      1,
+      ruleset
+    );
+    events.push(
+      makeEvent(nextSeq(), 1, 1, 'AWAITING_READING', ruleset.version, {
+        actor: players[0]!.id,
+        type: 'TurnStarted',
+        affectedCardIds: [],
+        source: 'elemental-prep-check',
+        reason: 'no-legal-elemental-action-auto-skip',
+        visibility: 'public',
+        summary: `${players[0]!.name} has no legal elemental action available on Turn 1 — proceeding directly to Reading.`
+      })
+    );
+  }
+
   const phase: GamePhase = outcome
     ? 'GAME_OVER'
     : majorBoardCtx.boardCenter.length === 0
       ? 'READY_TO_END_TURN'
-      : preReadingElemental
+      : canDoPreReadingElemental
         ? 'AWAITING_ELEMENTAL_ACTION'
         : ruleset.features.readings
           ? 'AWAITING_READING'

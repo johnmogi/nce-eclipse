@@ -230,11 +230,12 @@ describe('Milestone D1.1 — Direct Card-to-Zone Elemental UI Targeting', () => 
     });
 
     // Confirm p1 starts with 0 cards in hand because all 3 starting cards evolved!
+    // Because p1 has 0 hand cards and 0 Reader Bonuses on Turn 1, Elemental Prep auto-skips straight to AWAITING_READING!
     expect(s.players[0]!.hand).toEqual([]);
     expect(s.players[0]!.evolutionsCompleted).toBe(3);
+    expect(s.phase).toBe('AWAITING_READING');
 
-    // Turn 1 (p1): skip prep -> Reading -> Pursue -> Resolve Treasure (8♣ evolves -> hand still 0!) -> EndTurn
-    s = mustDispatch(s, { type: 'AdvanceToReading', playerId: 'p1' });
+    // Turn 1 (p1): Reading -> Pursue -> Resolve Treasure (8♣ evolves -> hand still 0!) -> EndTurn
     s = mustDispatch(s, { type: 'GiveReading', playerId: 'p2', advice: 'good' });
     s = mustDispatch(s, { type: 'PursueCenter', playerId: 'p1' });
     s = mustDispatch(s, { type: 'ResolveEvent', playerId: 'p1', sacrificeCardIds: [] });
@@ -242,7 +243,8 @@ describe('Milestone D1.1 — Direct Card-to-Zone Elemental UI Targeting', () => 
     expect(s.players[0]!.hand).toEqual([]);
     expect(s.players[0]!.evolutionsCompleted).toBe(4);
 
-    // Turn 2 (p2): skip prep -> p1 advises GOOD -> p2 pursues & claims 7♥ -> p1 earns Water Reader Bonus!
+    // Turn 2 (p2): has 3 hand cards -> enters Elemental Prep -> AdvanceToReading -> p1 advises GOOD -> p2 pursues & claims 7♥ -> p1 earns Water Reader Bonus!
+    expect(s.phase).toBe('AWAITING_ELEMENTAL_ACTION');
     s = mustDispatch(s, { type: 'AdvanceToReading', playerId: 'p2' });
     s = mustDispatch(s, { type: 'GiveReading', playerId: 'p1', advice: 'good' });
     s = mustDispatch(s, { type: 'PursueCenter', playerId: 'p2' });

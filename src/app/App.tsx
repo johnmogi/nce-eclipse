@@ -32,6 +32,7 @@ import { DeckView } from './components/DeckView.js';
 import { GameTable } from './components/GameTable.js';
 import { InspectorDrawer } from './components/InspectorDrawer.js';
 import { RulesView, type RulesDraftState } from './components/RulesView.js';
+import { SavedGamesPanel } from './components/SavedGamesPanel.js';
 import { SimulationLabView } from './components/SimulationLabView.js';
 import {
   getElementalTargetContext,
@@ -43,7 +44,13 @@ import {
   toggleVeilTargetSelection,
   type ElementalSelectionState
 } from './elementalTargeting.js';
-import { loadActiveSession, saveActiveSession, type PersistedSession } from './storage.js';
+import {
+  createSessionId,
+  deleteSavedSession,
+  listSavedSessions,
+  saveSessionRecord,
+  type PersistedSession
+} from './storage.js';
 
 type ActiveTab = 'play' | 'deck' | 'rules' | 'lab';
 
@@ -136,7 +143,10 @@ export function App() {
   );
   const [daysBrowserOpen, setDaysBrowserOpen] = useState<boolean>(false);
   const [veilTrayOpen, setVeilTrayOpen] = useState<boolean>(false);
-  const [pendingSavedSession, setPendingSavedSession] = useState<PersistedSession | null>(null);
+  const [savesOpen, setSavesOpen] = useState<boolean>(false);
+  const [currentSessionId, setCurrentSessionId] = useState<string>(() => createSessionId('auto'));
+  const [savedSessions, setSavedSessions] = useState<PersistedSession[]>([]);
+  const [resumeBannerDismissed, setResumeBannerDismissed] = useState<boolean>(false);
 
   const [storageKind, setStorageKind] = useState<string>('local');
   const [notice, setNotice] = useState<string | null>(null);
@@ -172,31 +182,47 @@ export function App() {
 
   useEffect(() => {
     let cancelled = false;
-    void loadActiveSession().then((saved) => {
+    void listSavedSessions().then((all) => {
       if (cancelled) return;
       hydratedRef.current = true;
-      if (!saved || saved.ruleset.version !== '1.6.0' || saved.commands.length <= 1) return;
-      // Never silently hijack a fresh Turn 1 opening with a stale mid-turn saved game;
-      // offer an explicit one-click Resume banner instead.
-      const rep = replay(saved.seed, saved.ruleset, saved.commands);
-      if (rep.ok) {
-        setPendingSavedSession(saved);
-      }
+      const valid = all.filter((saved) => {
+        if (saved.ruleset.version !== '1.6.0') return false;
+        const rep = replay(saved.seed, saved.ruleset, saved.commands);
+        return rep.ok;
+      });
+      setSavedSessions(valid);
     });
     return () => {
       cancelled = true;
     };
   }, []);
 
+  // Auto-save ONLY under this game's own unique sessionId AND ONLY once at least 1 move is played.
+  // Clicking New Game or loading Turn 1 NEVER overwrites any existing saved session!
   useEffect(() => {
     if (!hydratedRef.current) return;
-    void saveActiveSession({
+    if (liveState.commandHistory.length === 0) return;
+    const record: PersistedSession = {
+      id: currentSessionId,
+      label: `${liveState.seed} · R${liveState.round} T${liveState.turn}`,
+      kind: 'auto',
       seed: liveState.seed,
       ruleset: liveState.ruleset,
       commands: liveState.commandHistory.map((r) => r.command),
+      round: liveState.round,
+      turn: liveState.turn,
+      phase: liveState.phase,
+      stateHash: liveState.stateHash,
       updatedAt: new Date().toISOString()
-    }).then((kind) => setStorageKind(kind));
-  }, [liveState]);
+    };
+    void saveSessionRecord(record).then((kind) => {
+      setStorageKind(kind);
+      setSavedSessions((prev) => {
+        const others = prev.filter((s) => s.id !== record.id);
+        return [record, ...others].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+      });
+    });
+  }, [liveState, currentSessionId]);
 
   useEffect(() => {
     setSelectedSacrificeIds([]);
@@ -368,11 +394,13 @@ export function App() {
       startAtStepZero?: boolean;
       autoPlayReplay?: boolean;
       nextMode?: PlayControlMode;
+      resumeSessionId?: string;
     } = {}
   ) {
     const modeToUse = options.nextMode ?? controlMode;
     setReplayPlaying(false);
-    setPendingSavedSession(null);
+    setResumeBannerDismissed(true);
+    setCurrentSessionId(options.resumeSessionId ?? createSessionId('auto'));
     setSelectedSacrificeIds([]);
     setElementalSelection(INITIAL_ELEMENTAL_SELECTION);
     setDaysBrowserOpen(false);
@@ -418,6 +446,43 @@ export function App() {
     }
     setTimelineStep(null);
     setNotice(null);
+  }
+
+  function handleManualSaveCurrent() {
+    const saveId = createSessionId('save');
+    const record: PersistedSession = {
+      id: saveId,
+      label: `Save · ${liveState.seed} · R${liveState.round} T${liveState.turn}`,
+      kind: 'manual',
+      seed: liveState.seed,
+      ruleset: liveState.ruleset,
+      commands: liveState.commandHistory.map((r) => r.command),
+      round: liveState.round,
+      turn: liveState.turn,
+      phase: liveState.phase,
+      stateHash: liveState.stateHash,
+      updatedAt: new Date().toISOString()
+    };
+    void saveSessionRecord(record).then((kind) => {
+      setStorageKind(kind);
+      setSavedSessions((prev) => [record, ...prev.filter((s) => s.id !== record.id)]);
+      flashCopy(`Saved "${record.label}" (${record.commands.length} moves).`);
+    });
+  }
+
+  function handleResumeSavedSession(session: PersistedSession) {
+    setSavesOpen(false);
+    startNewGame(session.ruleset, session.seed, session.commands, {
+      resumeSessionId: session.id
+    });
+    setStorageKind('restored');
+    flashCopy(`Resumed "${session.label}" (${session.commands.length} moves).`);
+  }
+
+  function handleDeleteSavedSession(sessionId: string) {
+    void deleteSavedSession(sessionId).then(() => {
+      setSavedSessions((prev) => prev.filter((s) => s.id !== sessionId));
+    });
   }
 
   function sendCommand(command: Command) {
@@ -664,10 +729,27 @@ export function App() {
           </button>
           <button
             className="btn btn-sm"
+            data-testid="replay-seed-btn"
             title="Restart the exact current seed from Turn 1"
             onClick={() => startNewGame(ruleset, draftSeedInput.trim() || seed)}
           >
             ↺ Replay Seed
+          </button>
+          <button
+            className="btn btn-sm"
+            data-testid="save-game-topbar-btn"
+            title="Save an independent snapshot of this game (never overwritten by New Game)"
+            onClick={handleManualSaveCurrent}
+          >
+            Save
+          </button>
+          <button
+            className={`btn btn-sm ${savesOpen ? 'btn-active' : ''}`}
+            data-testid="saves-drawer-btn"
+            title="View, resume, or delete independently saved games"
+            onClick={() => setSavesOpen((o) => !o)}
+          >
+            Saves ({savedSessions.length})
           </button>
         </div>
 
@@ -748,29 +830,62 @@ export function App() {
         </div>
       </header>
 
-      {pendingSavedSession && (
-        <div className="banner-ok" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
-          <span>
-            Saved session available (seed <code className="mono">{pendingSavedSession.seed}</code> ·{' '}
-            {pendingSavedSession.commands.length} commands). Fresh Turn 1 is loaded below.
-          </span>
-          <div className="toolbar-group">
-            <button
-              className="btn btn-sm btn-primary"
-              onClick={() => {
-                const s = pendingSavedSession;
-                setPendingSavedSession(null);
-                startNewGame(s.ruleset, s.seed, s.commands);
-                setStorageKind('restored');
-              }}
-            >
-              Resume Saved Game
-            </button>
-            <button className="btn btn-sm" onClick={() => setPendingSavedSession(null)}>
-              Dismiss
-            </button>
+      {!resumeBannerDismissed &&
+        liveState.commandHistory.length === 0 &&
+        savedSessions.length > 0 && (
+          <div
+            className="banner-ok"
+            data-testid="resume-banner"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 10,
+              flexWrap: 'wrap'
+            }}
+          >
+            <span>
+              {savedSessions.length} saved game{savedSessions.length === 1 ? '' : 's'} available
+              (latest: <code className="mono">{savedSessions[0]!.seed}</code> · R
+              {savedSessions[0]!.round} T{savedSessions[0]!.turn} ·{' '}
+              {savedSessions[0]!.commands.length} move
+              {savedSessions[0]!.commands.length === 1 ? '' : 's'}). Fresh Turn 1 is loaded below.
+            </span>
+            <div className="toolbar-group">
+              <button
+                className="btn btn-sm btn-primary"
+                data-testid="resume-latest-btn"
+                onClick={() => handleResumeSavedSession(savedSessions[0]!)}
+              >
+                Resume Latest
+              </button>
+              <button
+                className="btn btn-sm"
+                onClick={() => {
+                  setSavesOpen(true);
+                  setResumeBannerDismissed(true);
+                }}
+              >
+                Choose Save ({savedSessions.length})
+              </button>
+              <button
+                className="btn btn-sm"
+                onClick={() => setResumeBannerDismissed(true)}
+              >
+                Dismiss
+              </button>
+            </div>
           </div>
-        </div>
+        )}
+      {savesOpen && (
+        <SavedGamesPanel
+          sessions={savedSessions}
+          activeSessionId={currentSessionId}
+          onSaveCurrent={handleManualSaveCurrent}
+          onResume={handleResumeSavedSession}
+          onDelete={handleDeleteSavedSession}
+          onClose={() => setSavesOpen(false)}
+        />
       )}
       {notice && <div className="banner-warn">{notice}</div>}
       {copyFeedback && <div className="banner-ok">{copyFeedback}</div>}

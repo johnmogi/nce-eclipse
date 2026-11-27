@@ -1594,3 +1594,25 @@ select {
   background: var(--red-card);
   border-color: var(--red-border);
 }
+
+.saved-games-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.saved-game-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.saved-game-current {
+  border-color: var(--accent);
+}

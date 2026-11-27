@@ -1,9 +1,9 @@
 {
   "name": "nexus-eclipse-engine",
-  "version": "0.4.0-md1",
+  "version": "0.6.1-r1",
   "private": true,
   "type": "module",
-  "description": "Nexus Central Engine (NCE) — Local-first deterministic TypeScript rules engine, CLI simulation lab, and playable Dev Console for Nexus Eclipse (Milestones A + B + C + D0 + D1).",
+  "description": "Nexus Central Engine (NCE) — Local-first deterministic TypeScript rules engine, CLI simulation lab, and playable tabletop UI for Nexus Eclipse (Stage R1 Stabilized Classic Prototype).",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
@@ -11,14 +11,16 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:e2e": "playwright test",
     "sim": "tsx src/sim/cli.ts",
-    "verify": "npm run typecheck && npm test && npm run sim -- --runs 500 --preset poker-proto-d1 --seed-prefix verify-d1 && npm run build"
+    "verify": "npm run typecheck && npm test && npm run sim -- --runs 500 --preset poker-proto-e --seed-prefix verify-r1 && npm run build"
   },
   "dependencies": {
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
+    "@playwright/test": "^1.65.1",
     "@types/node": "^22.10.2",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",

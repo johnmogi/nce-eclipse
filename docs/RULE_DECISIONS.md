@@ -7,13 +7,18 @@
 
 ## Gate R1 Decisions — First-Turn Reliability & Core Loop
 
-### `RD-01` — Starting Hand vs. Setup Mandatory Evolution `[CRITICAL · BLOCKS R1]`
-- **Problem:** Dealing 3 Minor cards and immediately running mandatory chained evolution can consume all 3 cards before Turn 1 (`eclipse-me-001` leaves Player 1 with `0/5` cards and Rank 6 while Bot holds `3/5` at Rank 1).
-- **Options:**
-  - **Option A — Refill after setup evolution (with cap):** Deal 3 Minors → run setup mandatory evolution → draw replacement Minors until hand reaches 3 (repeat evolution? Cap setup evolutions at max 1 or 2 steps, OR draw replacement cards that do *not* evolve until Turn 1).
-  - **Option B — Clean 3-card non-evolving opening hand *(Recommended)*:** Deal 3 Minors to each player; **if any dealt card would immediately evolve the starting Ace, return it to the Deck of Days and draw another Minor** (re-shuffling returned cards back into Days). Result: **both players guaranteed to start Turn 1 at Rank 1 Ace with exactly 3 playable hand cards**, zero unfair Turn-0 Rank-6 spikes, zero empty hands, 100% card conservation.
-  - **Option C — Keep current setup evolution:** Allow Turn-0 auto-evolution to empty hands; rely on UI notice only. *(Not recommended — breaks the 3-playable-cards opening experience.)*
-- **Creator Decision:** **`IMPLEMENTED IN R1 (Option B — preventSetupEvolution: true on v1.6.0; guaranteed 3 playable cards on Turn 1)`**
+### `RD-01` — Starting Hand vs. Setup Mandatory Evolution `[PROVISIONAL DISTRIBUTION · IMPLEMENTED IN R1]`
+- **Current R1 Setup Policy (`preventSetupEvolution: true` on `v1.6.0`):**
+  - Both players begin at their distinct Primary Aces (`Rank 1`).
+  - Each player is dealt **3 Minor cards**, skipping any Major/Court **and** skipping any Minor that would immediately evolve their starting Ace (reshuffling skipped cards back into Deck of Days).
+  - **Empty Veil (`0` cards)** and **3 occupied Board positions** (`Event` concealed Minor, `Center` concealed Minor, `Parallel` 3rd card) are enforced as hard setup invariants.
+- **Explicit Statistical Trade-Off Requiring Creator Confirmation `[PROVISIONAL]`:**
+  - Filtering out Rank `2–3` same-color cards during the initial deal guarantees 3 playable cards on Turn 1, **but alters the opening-hand probability distribution** (slightly biasing starting hands toward higher ranks and opposite-color cards compared to an unfiltered physical shuffle).
+  - **Options for permanent canon:**
+    - **Option B (Current R1):** Re-deal setup-evolving Minors into Days → guaranteed Rank 1 + 3 playable cards, slightly altered opening distribution.
+    - **Option A:** Deal raw 3 Minors → run setup evolution → draw replacements back up to 3 (raw initial draw, but players can start Turn 1 at asymmetric Ranks 1 vs 4+).
+    - **Option D (Physical-friendly alternative):** Deal raw 3 Minors and defer mandatory evolution trigger until the player's **first acquisition** (preserves raw physical shuffle distribution AND 3 starting cards!).
+- **Creator Decision:** `PROVISIONAL IN R1 (Option B active; awaiting creator confirmation of altered opening-hand distribution vs Option D)`
 
 ### `RD-02` — Maximum Hand Size (`maxHandSize`) `[MEDIUM · BLOCKS R1]`
 - **Problem:** Presets currently use `startingHandSize = 3`, `maxHandSize = 5`. Recent playtest feedback requested checking whether the default hand limit should be `3` instead of `5`.
@@ -131,6 +136,20 @@
 ### `RD-12` — Trial Formula Confirmation `[LOW · ALREADY IMPLEMENTED PROVISIONALLY]`
 - Currently: compares against **Left Event element** (`Water > Fire > Earth > Air > Water`), requires at least 1 advantageous card (lineage or sacrifice), grants `+1 VP` once, must strictly exceed Event VP (`> 1`), capped at `maxEffectiveVP = 3`.
 - **Decision needed:** Confirm as **`[AGREED]`** for Classic mode, or request adjustment.
+- **Creator Decision:** `PENDING`
+
+---
+
+### `RD-16` — Zero-Sacrifice Reconciliation Auto-Claim Proposal `[OPEN · DESIGN PROPOSAL ONLY — NOT SILENTLY IMPLEMENTED]`
+- **Problem:** When a revealed Left Event is a **Treasure** (free, no decline allowed) or a **Barrier/Trial already cleared by Lineage alone (`0` sacrifices needed)**, clicking a mandatory confirmation button can feel like a redundant "Click Me" step.
+- **Strategic Distinction (Why Blanket Auto-Claim Is Dangerous):**
+  - **Treasure (`7–9`):** Player cannot abandon a Treasure; if `hand.length < maxHandSize`, there is genuinely **no choice** (though seeing what card you just claimed & evolved before the turn advances still matters for readability!).
+  - **Zero-Cost Barrier / Trial:** Player **does** have a strategic choice (`Leave for Next Player`) — declining can avoid taking an off-color card, avoid triggering a mandatory evolution into a different element, or avoid overflowing `maxHandSize` (forcing a discard to Veil).
+- **Concrete Proposal (Behind Configurable `autoClaimPolicy` Knob — Default `'manual'` Until Approved):**
+  - **Option A — `'manual'` *(Current R1)*:** Always show explicit `Claim Treasure` / `Claim Card (No Sacrifice Needed)` + secondary `Leave for Next Player` on Barriers/Trials.
+  - **Option B — `'treasure_only'` *(Recommended compromise)*:** Automatically claim **Treasures** (when `hand.length < maxHandSize`) with a prominent result toast showing the claimed card and any chained evolution, while keeping explicit `Claim / Leave for Next Player` on Barriers & Trials so strategic abandonment is always preserved.
+  - **Option C — `'all_zero_cost_below_cap'`:** Auto-claim Treasure, Barrier, and Trial whenever `0` sacrifices are needed AND `hand.length < maxHandSize` (removes strategic refusal on zero-cost obstacles — *not recommended* unless playtesters confirm they never refuse zero-cost cards).
+- **Guardrail:** Does **not** add an after-reading elemental action or alter `maxHandSize`.
 - **Creator Decision:** `PENDING`
 
 ---

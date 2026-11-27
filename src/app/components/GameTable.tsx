@@ -447,6 +447,7 @@ export function GameTable({
           className={`table-zone ${daysClickable ? 'zone-target-eligible' : ''} ${
             elementalSelection.daysSelected || daysBrowserOpen ? 'zone-target-selected' : ''
           }`}
+          data-testid="deck-of-days-zone"
           onClick={daysClickable ? onClickDaysZone : onToggleDaysBrowser}
           role="button"
           tabIndex={0}
@@ -709,6 +710,7 @@ export function GameTable({
           className={`table-zone ${veilHighlighted ? 'zone-target-eligible' : ''} ${
             veilTrayOpen || elementalSelection.veilCardIds.length > 0 ? 'zone-target-selected' : ''
           }`}
+          data-testid="veil-zone"
           onClick={onToggleVeilTray}
           role="button"
           tabIndex={0}
@@ -951,6 +953,7 @@ export function GameTable({
                 <>
                   <button
                     className="btn btn-primary"
+                    data-testid="accept-center-btn"
                     onClick={() =>
                       onSendCommand({ type: 'PursueCenter', playerId: view.activePlayerId })
                     }
@@ -961,6 +964,7 @@ export function GameTable({
                   </button>
                   <button
                     className="btn"
+                    data-testid="reject-center-btn"
                     onClick={() =>
                       onSendCommand({ type: 'DiscardCenter', playerId: view.activePlayerId })
                     }
@@ -1006,6 +1010,7 @@ export function GameTable({
               <div className="toolbar-group">
                 <button
                   className="btn btn-primary"
+                  data-testid="resolve-event-btn"
                   disabled={!canActAsActivePlayer || !liveReconciliation.passes}
                   onClick={() =>
                     onSendCommand({
@@ -1187,7 +1192,7 @@ export function GameTable({
                     : !focusedHandHasCards && availableBonuses.length > 0
                       ? 'Your hand is empty, but you have a free Reader Bonus ready! Click the gold ★ Activate button below (0 hand cost), choose your target on the table, then click Confirm — or proceed straight to Reading.'
                       : preReadingElemental
-                        ? 'Click a card in your hand (or a free Reader Bonus below) to influence Deck of Days, Shared Board, or Veil BEFORE your Reading — or proceed straight to Reading.'
+                        ? 'Two choices: (1) Click a card in your hand below (or a gold Reader Bonus) to activate its elemental effect BEFORE Reading — OR (2) Click "Proceed to Reading →" to skip straight to your Reading.'
                         : 'Click any highlighted card in your hand below (consumes card → Veil) or a free Reader Bonus, then click the highlighted Deck, Board, or Veil zone to confirm.'}
                 </div>
               </div>
@@ -1244,6 +1249,7 @@ export function GameTable({
                 {preReadingElemental ? (
                   <button
                     className={`btn ${activeElement ? '' : 'btn-primary'}`}
+                    data-testid="proceed-to-reading-btn"
                     disabled={!canActAsActivePlayer}
                     onClick={() =>
                       onSendCommand({ type: 'AdvanceToReading', playerId: view.activePlayerId })
@@ -1424,6 +1430,7 @@ export function GameTable({
             </div>
             <button
               className="btn btn-primary"
+              data-testid="end-turn-btn"
               disabled={!canActAsActivePlayer}
               onClick={() => onSendCommand({ type: 'EndTurn', playerId: view.activePlayerId })}
             >

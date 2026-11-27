@@ -292,6 +292,34 @@ describe('Stage R1 — First-Turn Reliability, Reject-Replace, 3-Slot Board, Any
     expect(rep.finalState.stateHash).toBe(s.stateHash);
   });
 
+  it('Elemental Prep auto-skips ONLY when no legal elemental action exists (e.g., Water-only hand with empty Veil), and stays open when any legal action exists', () => {
+    // Case A: p1 holds ONLY Water cards while Veil is empty -> NO legal elemental action -> auto-skips straight to AWAITING_READING!
+    const sNoLegal = createGame(classicR1, 'r1-auto-skip-water-empty-veil', {
+      startingElements: ['air', 'fire'],
+      overrideHands: [
+        ['classic-water-04', 'classic-water-05', 'classic-water-06'],
+        ['classic-earth-08', 'classic-earth-09', 'classic-air-08']
+      ],
+      overrideDaysTop: ['classic-earth-07', 'classic-air-05', 'classic-fire-06']
+    });
+    expect(sNoLegal.phase).toBe('AWAITING_READING');
+    expect(sNoLegal.currentReading?.readerId).toBe('p2');
+    expect(checkInvariants(sNoLegal).ok).toBe(true);
+
+    // Case B: p1 holds ONLY Water cards while Veil has 1 card -> Water IS legal -> stays in AWAITING_ELEMENTAL_ACTION!
+    const sWaterLegal = createGame(classicR1, 'r1-no-skip-water-with-veil', {
+      startingElements: ['air', 'fire'],
+      overrideHands: [
+        ['classic-water-04', 'classic-water-05', 'classic-water-06'],
+        ['classic-earth-08', 'classic-earth-09', 'classic-air-08']
+      ],
+      overrideDaysTop: ['classic-earth-07', 'classic-air-05', 'classic-fire-06'],
+      overrideVeil: ['classic-fire-04']
+    });
+    expect(sWaterLegal.phase).toBe('AWAITING_ELEMENTAL_ACTION');
+    expect(checkInvariants(sWaterLegal).ok).toBe(true);
+  });
+
   it('passes 500-run Stage R1 simulation gate with zero invariant or replay failures', () => {
     const batch = runSimulationBatch({
       ruleset: classicR1,

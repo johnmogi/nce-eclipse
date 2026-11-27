@@ -79,6 +79,64 @@ export function getAvailableReaderBonusesForTurn(
   );
 }
 
+function elementHasLegalTarget(
+  element: Element,
+  zones: {
+    readonly daysCount: number;
+    readonly veilCount: number;
+    readonly boardOccupiedCount: number;
+  }
+): boolean {
+  if (element === 'water') {
+    return zones.veilCount > 0;
+  }
+  if (element === 'fire') {
+    return zones.daysCount >= 1 || zones.boardOccupiedCount > 0;
+  }
+  // Air & Earth
+  return zones.daysCount >= 2 || zones.boardOccupiedCount > 0;
+}
+
+/**
+ * Returns true iff the active player has at least ONE legal elemental action
+ * (either a hand card with a legal zone target, or an available Reader Bonus with a legal target).
+ * Used to auto-skip pre-reading AWAITING_ELEMENTAL_ACTION ONLY when no legal action exists.
+ */
+export function hasAnyLegalElementalAction(params: {
+  player: PlayerState;
+  cards: Readonly<Record<string, Card>>;
+  turn: number;
+  ruleset: Ruleset;
+  daysCount: number;
+  veilCount: number;
+  boardOccupiedCount: number;
+}): boolean {
+  const { player, cards, turn, ruleset, daysCount, veilCount, boardOccupiedCount } = params;
+  if (!ruleset.features.elementalEffects) return false;
+
+  const zones = { daysCount, veilCount, boardOccupiedCount };
+
+  if (!player.effectUsedThisTurn) {
+    for (const cardId of player.hand) {
+      const card = cards[cardId];
+      if (card?.element && elementHasLegalTarget(card.element, zones)) {
+        return true;
+      }
+    }
+  }
+
+  if (!ruleset.readerBonusConsumesTurnAction || !player.effectUsedThisTurn) {
+    const bonuses = getAvailableReaderBonusesForTurn(player, turn, ruleset);
+    for (const bonus of bonuses) {
+      if (bonus.sourceElement && elementHasLegalTarget(bonus.sourceElement, zones)) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
 interface ValidatedAirPlan {
   readonly kind: 'air';
   readonly boardSlots: BoardTargetSlot[];

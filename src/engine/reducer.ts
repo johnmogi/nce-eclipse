@@ -3,6 +3,7 @@ import {
   computeElementalStrength,
   expireUnusedReaderBonuses,
   getAvailableReaderBonusesForTurn,
+  hasAnyLegalElementalAction,
   validateAndExecuteElementalEffect,
   validateAndExecuteReaderBonus,
   type ElementalMutableContext
@@ -1645,15 +1646,38 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
         }
 
         const endedByEventDraw = populateEventSlotFromDays('turn-refill');
-        const preReadingElemental =
+        const preReadingElementalRequested =
           state.ruleset.features.elementalEffects &&
           state.ruleset.elementalTiming === 'before_reading';
 
+        const computeNextTurnPreElemental = (): boolean =>
+          preReadingElementalRequested &&
+          hasAnyLegalElementalAction({
+            player: players[activePlayerIndex]!,
+            cards: state.cards,
+            turn,
+            ruleset: state.ruleset,
+            daysCount: days.length,
+            veilCount: veil.length,
+            boardOccupiedCount:
+              boardEvent.length + boardCenter.length + boardParallel.length + 1
+          });
+
         if (!endedByEventDraw) {
           if (centerAbandoned && boardCenter.length > 0) {
-            phase = preReadingElemental
-              ? 'AWAITING_ELEMENTAL_ACTION'
-              : 'AWAITING_ABANDONED_CHOICE';
+            const canPrep =
+              preReadingElementalRequested &&
+              hasAnyLegalElementalAction({
+                player: players[activePlayerIndex]!,
+                cards: state.cards,
+                turn,
+                ruleset: state.ruleset,
+                daysCount: days.length,
+                veilCount: veil.length,
+                boardOccupiedCount:
+                  boardEvent.length + boardCenter.length + boardParallel.length
+              });
+            phase = canPrep ? 'AWAITING_ELEMENTAL_ACTION' : 'AWAITING_ABANDONED_CHOICE';
             currentReading = null;
           } else if (boardCenter.length === 0 && !state.ruleset.emptyChamberMode && boardParallel.length > 0 && !isMajorCard(state.cards[boardParallel[0]!])) {
             // Stage R1 (RD-15): Slide concealed Minor from Right chamber -> Center, then refill Right from Days!
@@ -1662,10 +1686,11 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
             boardCenter.push(slidId);
             centerRevealed = !state.ruleset.features.readings;
             const reader = players[(activePlayerIndex + 1) % players.length]!;
+            const canPrep = computeNextTurnPreElemental();
             if (!state.ruleset.features.readings) {
               currentReading = null;
               phase = 'AWAITING_CENTER_DECISION';
-            } else if (preReadingElemental) {
+            } else if (canPrep) {
               currentReading = null;
               phase = 'AWAITING_ELEMENTAL_ACTION';
             } else {
@@ -1687,7 +1712,7 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
                 source: 'turn-refill',
                 reason: 'slide-parallel-to-center',
                 visibility: 'public',
-                summary: preReadingElemental
+                summary: canPrep
                   ? `Turn ${turn}: Right chamber card slid into Center (${slidCard.backGroup} back). Optional Elemental Prep open before Reading.`
                   : `Turn ${turn}: Right chamber card slid into Center (${slidCard.backGroup} back). Waiting for ${reader.name}'s reading.`,
                 payload: { from: 'parallel', to: 'center', concealed: !centerRevealed }
@@ -1708,7 +1733,8 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
             populateParallelSlotFromDays('turn-refill');
           } else if (boardCenter.length === 0 && days.length > 0) {
             if (state.ruleset.features.readings) {
-              if (!dealFreshConcealedCenterForReading('turn-refill', preReadingElemental)) {
+              const canPrep = computeNextTurnPreElemental();
+              if (!dealFreshConcealedCenterForReading('turn-refill', canPrep)) {
                 populateParallelSlotFromDays('turn-refill');
               }
             } else {
