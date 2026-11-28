@@ -305,7 +305,8 @@ describe('Executive Blueprint v0.2 — Milestone C Worked Acceptance Scenarios (
 
     // Export Admin bundle & replay from scratch -> exact final state hash match!
     const adminExport = buildExportBundle(s, { role: 'admin' });
-    const replayed = replay(adminExport.seed, adminExport.ruleset, adminExport.commands!, opts);
+    expect(adminExport.seed).toBe('s6-multiturn');
+    const replayed = replay(adminExport.seed!, adminExport.ruleset, adminExport.commands!, opts);
     expect(replayed.ok).toBe(true);
     expect(replayed.finalState.stateHash).toBe(adminExport.finalStateHash);
     expect(replayed.finalState.stateHash).toBe(s.stateHash);

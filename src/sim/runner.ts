@@ -18,15 +18,29 @@ export interface SingleRunReport {
   readonly totalEvolutions: number;
   readonly maxChainLength: number;
   readonly readingsGiven: number;
+  readonly readingsOfferedByPlayer: Readonly<Record<string, number>>;
   readonly adviceFollowed: number;
   readonly deceptiveReadings: number;
   readonly readerBonusesGranted: number;
+  readonly readerBonusesConsumed: number;
+  readonly readerBonusesExpired: number;
   readonly readerBonusesWithheldOnAbandon: number;
   readonly treasuresClaimed: number;
   readonly barriersReconciled: number;
   readonly trialsPassed: number;
   readonly centersAbandoned: number;
   readonly abandonedClaimedFree: number;
+  readonly abandonedDeclined: number;
+  readonly maxConsecutiveAbandons: number;
+  readonly hadConsecutiveAbandon: boolean;
+  readonly consecutiveAbandonPlayerWon: boolean;
+  readonly revealedBoardElementalActions: number;
+  readonly airEffectsUsed: number;
+  readonly fireEffectsUsed: number;
+  readonly waterEffectsUsed: number;
+  readonly earthEffectsUsed: number;
+  readonly eclipsesFormed: number;
+  readonly triangulationsCompleted: number;
   readonly finalStateHash: string;
   readonly replayVerified: boolean;
   readonly invariantOk: boolean;
@@ -69,15 +83,31 @@ export interface BatchSimulationSummary {
   readonly avgMaxChainLength: number;
   readonly multiStepChainRuns: number;
   readonly totalReadings: number;
+  readonly avgReadingsPerPlayer: Readonly<Record<string, number>>;
+  readonly readerParityRatio: number;
   readonly adviceFollowPct: number;
   readonly deceptionPct: number;
   readonly avgReaderBonuses: number;
+  readonly totalReaderBonusesConsumed: number;
+  readonly totalReaderBonusesExpired: number;
   readonly totalTreasures: number;
   readonly totalBarriersPassed: number;
   readonly totalTrialsPassed: number;
   readonly totalAbandoned: number;
   readonly totalAbandonedClaimedFree: number;
+  readonly totalAbandonedDeclined: number;
+  readonly abandonedClaimRatePct: number;
+  readonly gamesWithConsecutiveAbandon: number;
+  readonly winRateAfterConsecutiveAbandonPct: number;
+  readonly totalRevealedBoardElementalActions: number;
   readonly totalWithheldOnAbandon: number;
+  readonly totalAirEffects: number;
+  readonly totalFireEffects: number;
+  readonly totalWaterEffects: number;
+  readonly totalEarthEffects: number;
+  readonly totalEclipsesFormed: number;
+  readonly eclipseVictories: number;
+  readonly triangulationVictories: number;
   readonly byElement: readonly ElementSummary[];
   readonly sampleRuns: readonly SingleRunReport[];
 }
@@ -88,7 +118,7 @@ export function runSingleSimulation(
   policy: AgentPolicyId,
   options: { verifyReplay?: boolean; maxSteps?: number } = {}
 ): SingleRunReport {
-  const maxSteps = options.maxSteps ?? 600;
+  const maxSteps = options.maxSteps ?? 800;
   let state: GameState = createGame(ruleset, seed);
   let steps = 0;
 
@@ -120,7 +150,14 @@ export function runSingleSimulation(
     (sum, p) => sum + p.pendingReaderBonuses.length,
     0
   );
+  const readerBonusesConsumed = state.events.filter((e) => e.type === 'ReaderBonusConsumed').length;
+  const readerBonusesExpired = state.events.filter((e) => e.type === 'ReaderBonusExpired').length;
   const readingsGiven = state.readingHistory.length;
+  const readingsOfferedByPlayer: Record<string, number> = {};
+  for (const p of state.players) readingsOfferedByPlayer[p.id] = 0;
+  for (const r of state.readingHistory) {
+    readingsOfferedByPlayer[r.readerId] = (readingsOfferedByPlayer[r.readerId] ?? 0) + 1;
+  }
   const adviceFollowed = state.readingHistory.filter((r) => r.adviceFollowed === true).length;
   const deceptiveReadings = state.readingHistory.filter((r) => r.adviceTruthful === false).length;
   const readerBonusesWithheldOnAbandon = state.readingHistory.filter(
@@ -132,6 +169,61 @@ export function runSingleSimulation(
   const trialsPassed = state.events.filter((e) => e.type === 'TrialPassed').length;
   const centersAbandoned = state.events.filter((e) => e.type === 'CenterAbandoned').length;
   const abandonedClaimedFree = state.events.filter((e) => e.type === 'AbandonedCardClaimed').length;
+  const abandonedDeclined = state.events.filter((e) => e.type === 'AbandonedCardDeclined').length;
+  const revealedBoardElementalActions = state.events.filter(
+    (e) =>
+      e.type === 'ElementalEffectActivated' && e.phase === 'AWAITING_EVENT_RESOLUTION'
+  ).length;
+
+  // Track consecutive abandon streaks per player across their turns
+  const currentAbandonStreak: Record<string, number> = {};
+  const maxAbandonStreakByPlayer: Record<string, number> = {};
+  const turnHadAbandon: Record<string, boolean> = {};
+  for (const p of state.players) {
+    currentAbandonStreak[p.id] = 0;
+    maxAbandonStreakByPlayer[p.id] = 0;
+  }
+  for (const ev of state.events) {
+    if (ev.type === 'CenterAbandoned') {
+      turnHadAbandon[`${ev.turn}:${ev.actor}`] = true;
+    } else if (ev.type === 'TurnFinished') {
+      const pid = ev.actor;
+      if (turnHadAbandon[`${ev.turn}:${pid}`]) {
+        currentAbandonStreak[pid] = (currentAbandonStreak[pid] ?? 0) + 1;
+        maxAbandonStreakByPlayer[pid] = Math.max(
+          maxAbandonStreakByPlayer[pid] ?? 0,
+          currentAbandonStreak[pid]!
+        );
+      } else {
+        currentAbandonStreak[pid] = 0;
+      }
+    }
+  }
+  const maxConsecutiveAbandons = Math.max(0, ...Object.values(maxAbandonStreakByPlayer));
+  const consecutiveAbandonPlayerIds = Object.entries(maxAbandonStreakByPlayer)
+    .filter(([, streak]) => streak >= 2)
+    .map(([pid]) => pid);
+  const hadConsecutiveAbandon = consecutiveAbandonPlayerIds.length > 0;
+  const winnerIds = state.outcome?.winnerIds ?? [];
+  const consecutiveAbandonPlayerWon = consecutiveAbandonPlayerIds.some((pid) =>
+    winnerIds.includes(pid)
+  );
+  const eclipsesFormed = state.events.filter((e) => e.type === 'EclipseFormed').length;
+  const triangulationsCompleted = state.events.filter((e) => e.type === 'TriangulationCompleted').length;
+
+  let airEffectsUsed = 0;
+  let fireEffectsUsed = 0;
+  let waterEffectsUsed = 0;
+  let earthEffectsUsed = 0;
+  for (const ev of state.events) {
+    if (ev.type === 'ElementalEffectResolved') {
+      const el = ev.payload?.element;
+      if (el === 'air') airEffectsUsed += 1;
+      else if (el === 'fire') fireEffectsUsed += 1;
+      else if (el === 'water') waterEffectsUsed += 1;
+      else if (el === 'earth') earthEffectsUsed += 1;
+    }
+  }
 
   return {
     seed,
@@ -148,15 +240,29 @@ export function runSingleSimulation(
     totalEvolutions,
     maxChainLength,
     readingsGiven,
+    readingsOfferedByPlayer,
     adviceFollowed,
     deceptiveReadings,
     readerBonusesGranted,
+    readerBonusesConsumed,
+    readerBonusesExpired,
     readerBonusesWithheldOnAbandon,
     treasuresClaimed,
     barriersReconciled,
     trialsPassed,
     centersAbandoned,
     abandonedClaimedFree,
+    abandonedDeclined,
+    maxConsecutiveAbandons,
+    hadConsecutiveAbandon,
+    consecutiveAbandonPlayerWon,
+    revealedBoardElementalActions,
+    airEffectsUsed,
+    fireEffectsUsed,
+    waterEffectsUsed,
+    earthEffectsUsed,
+    eclipsesFormed,
+    triangulationsCompleted,
     finalStateHash: state.stateHash,
     replayVerified,
     invariantOk,
@@ -201,12 +307,26 @@ export function runSimulationBatch(params: {
   let totalAdviceFollowed = 0;
   let totalDeceptive = 0;
   let totalReaderBonuses = 0;
+  let totalReaderBonusesConsumed = 0;
+  let totalReaderBonusesExpired = 0;
   let totalTreasures = 0;
   let totalBarriersPassed = 0;
   let totalTrialsPassed = 0;
   let totalAbandoned = 0;
   let totalAbandonedClaimedFree = 0;
+  let totalAbandonedDeclined = 0;
+  let gamesWithConsecutiveAbandon = 0;
+  let winsAfterConsecutiveAbandon = 0;
+  let totalRevealedBoardElementalActions = 0;
   let totalWithheldOnAbandon = 0;
+  const readingsByPlayerTotals: Record<string, number> = {};
+  let totalAirEffects = 0;
+  let totalFireEffects = 0;
+  let totalWaterEffects = 0;
+  let totalEarthEffects = 0;
+  let totalEclipsesFormed = 0;
+  let eclipseVictories = 0;
+  let triangulationVictories = 0;
 
   const elementStats: Record<Element, { appearances: number; rankSum: number; wins: number }> = {
     air: { appearances: 0, rankSum: 0, wins: 0 },
@@ -225,6 +345,8 @@ export function runSimulationBatch(params: {
 
     if (report.outcomeReason === 'target_rank_reached') targetReachedCount += 1;
     if (report.outcomeReason === 'days_exhausted') daysExhaustedCount += 1;
+    if (report.outcomeReason === 'eclipse_victory') eclipseVictories += 1;
+    if (report.outcomeReason === 'triangulation_victory') triangulationVictories += 1;
     if (!report.invariantOk) invariantFailures += 1;
     if (!report.replayVerified) replayFailures += 1;
 
@@ -242,12 +364,28 @@ export function runSimulationBatch(params: {
     totalAdviceFollowed += report.adviceFollowed;
     totalDeceptive += report.deceptiveReadings;
     totalReaderBonuses += report.readerBonusesGranted;
+    totalReaderBonusesConsumed += report.readerBonusesConsumed;
+    totalReaderBonusesExpired += report.readerBonusesExpired;
     totalTreasures += report.treasuresClaimed;
     totalBarriersPassed += report.barriersReconciled;
     totalTrialsPassed += report.trialsPassed;
     totalAbandoned += report.centersAbandoned;
     totalAbandonedClaimedFree += report.abandonedClaimedFree;
+    totalAbandonedDeclined += report.abandonedDeclined;
+    if (report.hadConsecutiveAbandon) {
+      gamesWithConsecutiveAbandon += 1;
+      if (report.consecutiveAbandonPlayerWon) winsAfterConsecutiveAbandon += 1;
+    }
+    totalRevealedBoardElementalActions += report.revealedBoardElementalActions;
+    for (const [pid, count] of Object.entries(report.readingsOfferedByPlayer)) {
+      readingsByPlayerTotals[pid] = (readingsByPlayerTotals[pid] ?? 0) + count;
+    }
     totalWithheldOnAbandon += report.readerBonusesWithheldOnAbandon;
+    totalAirEffects += report.airEffectsUsed;
+    totalFireEffects += report.fireEffectsUsed;
+    totalWaterEffects += report.waterEffectsUsed;
+    totalEarthEffects += report.earthEffectsUsed;
+    totalEclipsesFormed += report.eclipsesFormed;
 
     for (const pr of report.playerFinalRanks) {
       const bucket = elementStats[pr.primaryElement];
@@ -275,6 +413,16 @@ export function runSimulationBatch(params: {
     };
   });
 
+  const avgReadingsPerPlayer: Record<string, number> = {};
+  const playerReadingValues = Object.values(readingsByPlayerTotals);
+  for (const [pid, tot] of Object.entries(readingsByPlayerTotals)) {
+    avgReadingsPerPlayer[pid] = Number((tot / safeRuns).toFixed(2));
+  }
+  const minPlayerReadings = playerReadingValues.length > 0 ? Math.min(...playerReadingValues) : 0;
+  const maxPlayerReadings = playerReadingValues.length > 0 ? Math.max(...playerReadingValues) : 0;
+  const readerParityRatio =
+    maxPlayerReadings > 0 ? Number((minPlayerReadings / maxPlayerReadings).toFixed(3)) : 1;
+
   return {
     rulesetId: ruleset.id,
     rulesetVersion: ruleset.version,
@@ -298,15 +446,35 @@ export function runSimulationBatch(params: {
     avgMaxChainLength: Number((totalMaxChain / safeRuns).toFixed(2)),
     multiStepChainRuns,
     totalReadings,
+    avgReadingsPerPlayer,
+    readerParityRatio,
     adviceFollowPct: totalReadings > 0 ? Number(((totalAdviceFollowed / safeReadings) * 100).toFixed(1)) : 0,
     deceptionPct: totalReadings > 0 ? Number(((totalDeceptive / safeReadings) * 100).toFixed(1)) : 0,
     avgReaderBonuses: Number((totalReaderBonuses / safeRuns).toFixed(2)),
+    totalReaderBonusesConsumed,
+    totalReaderBonusesExpired,
     totalTreasures,
     totalBarriersPassed,
     totalTrialsPassed,
     totalAbandoned,
     totalAbandonedClaimedFree,
+    totalAbandonedDeclined,
+    abandonedClaimRatePct:
+      totalAbandoned > 0 ? Number(((totalAbandonedClaimedFree / totalAbandoned) * 100).toFixed(1)) : 0,
+    gamesWithConsecutiveAbandon,
+    winRateAfterConsecutiveAbandonPct:
+      gamesWithConsecutiveAbandon > 0
+        ? Number(((winsAfterConsecutiveAbandon / gamesWithConsecutiveAbandon) * 100).toFixed(1))
+        : 0,
+    totalRevealedBoardElementalActions,
     totalWithheldOnAbandon,
+    totalAirEffects,
+    totalFireEffects,
+    totalWaterEffects,
+    totalEarthEffects,
+    totalEclipsesFormed,
+    eclipseVictories,
+    triangulationVictories,
     byElement,
     sampleRuns
   };

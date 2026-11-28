@@ -1,0 +1,47 @@
+name: Nexus Central Engine CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck (strict TypeScript)
+        run: npm run typecheck
+
+      - name: Unit, Invariant, Privacy & Integration Tests
+        run: npm test
+
+      - name: Deterministic Batch Simulation (Stage R1 Classic Prototype · 500 runs)
+        run: npm run sim -- --runs 500 --preset poker-proto-e --policy bluffing-rival --seed-prefix ci-r1
+
+      - name: Deterministic Batch Simulation (Milestone D1 Baseline · 500 runs)
+        run: npm run sim -- --runs 500 --preset poker-proto-d1 --policy bluffing-rival --seed-prefix ci-d1
+
+      - name: Deterministic Batch Simulation (Milestone C Baseline · 500 runs)
+        run: npm run sim -- --runs 500 --preset poker-proto-c --policy bluffing-rival --seed-prefix ci-mc
+
+      - name: Production Vite Build
+        run: npm run build
+
+      - name: Install Playwright Chromium for E2E
+        run: npx playwright install --with-deps chromium
+
+      - name: Browser E2E Acceptance Walkthrough (Playwright)
+        run: npm run test:e2e

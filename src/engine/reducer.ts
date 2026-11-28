@@ -1,29 +1,60 @@
-import { buildCardCatalog, ELEMENTS } from './cards.js';
-import { isEligibleEvolution, resolveMandatoryEvolutionChain } from './evolution.js';
+import {
+  canActivateHandElementalInPhase,
+  canSpendReaderBonusInPhase,
+  computeElementalStrength,
+  expireUnusedReaderBonuses,
+  getAvailableReaderBonusesForTurn,
+  getElementalActionsUsedCount,
+  hasAnyLegalElementalAction,
+  hasRemainingHandElementalAction,
+  validateAndExecuteElementalEffect,
+  validateAndExecuteReaderBonus,
+  type ElementalMutableContext
+} from './elemental-effects.js';
+import {
+  applyEvolutionWithEvents,
+  evaluateCompletion,
+  fail,
+  finalizeState,
+  makeEvent
+} from './event-helpers.js';
 import { computeStateHash } from './hash.js';
-import { assertInvariants } from './invariants.js';
+import {
+  activateReadyDormantMajors,
+  drawNextMinorRoutingMajors,
+  evaluateCombos,
+  isMajorCard,
+  placeDrawnMajorOnBoard,
+  type MajorMutableBoard
+} from './majors.js';
+import {
+  computeReadingHints,
+  createReadingForTurn,
+  finalizeReadingReward,
+  isCardObjectivelyHelpful
+} from './readings.js';
 import { evaluateReconciliation, eventCardToReality } from './reconciliation.js';
-import { deterministicShuffle, seedToUint32 } from './rng.js';
-import { ENGINE_VERSION } from './rulesets.js';
+import { createGame } from './setup.js';
 import type {
+  BoardTargetSlot,
   Card,
   Command,
   CommandRecord,
   CreateGameOptions,
   DispatchResult,
-  Element,
-  EventVisibility,
   GameEvent,
-  GameEventType,
   GameOutcome,
   GamePhase,
   GameState,
+  MajorPendingEntry,
+  PendingEarthReorderState,
   PlayerState,
-  ReadingHints,
   ReadingRecord,
   Ruleset,
   ValidationError
 } from './types.js';
+
+export { createGame, isCardObjectivelyHelpful };
 
 const FUTURE_FEATURE_COMMANDS: Readonly<
   Record<string, { flag: keyof Ruleset['features']; label: string }>
@@ -35,558 +66,19 @@ const FUTURE_FEATURE_COMMANDS: Readonly<
   AbandonCenter: { flag: 'barriersAndTrials', label: 'Event Realities (Milestone C / Level 1.3)' },
   ClaimAbandonedCard: { flag: 'barriersAndTrials', label: 'Event Realities (Milestone C / Level 1.3)' },
   DeclineAbandonedCard: { flag: 'barriersAndTrials', label: 'Event Realities (Milestone C / Level 1.3)' },
-  UseElementalEffect: { flag: 'elementalEffects', label: 'Elemental Hand Effects (Milestone D)' },
-  ProposeTrade: { flag: 'tradingMarket', label: 'Trading Market (Milestone D)' },
-  AcceptTrade: { flag: 'tradingMarket', label: 'Trading Market (Milestone D)' },
+  UseElementalEffect: { flag: 'elementalEffects', label: 'Elemental Hand Effects (Milestone D1)' },
+  UseReaderBonus: { flag: 'elementalEffects', label: 'Reader Bonus Elemental Action (Milestone D1)' },
+  StartEarthPeek: { flag: 'elementalEffects', label: 'Earth Immediate Future Peek (Stage R1)' },
+  CommitEarthReorder: { flag: 'elementalEffects', label: 'Earth Deliberate Reorder (Stage R1)' },
+  AdvanceToReading: { flag: 'elementalEffects', label: 'Pre-Reading Elemental Prep (Milestone E)' },
+  ProposeTrade: { flag: 'tradingMarket', label: 'Trading Market (Milestone D2)' },
+  AcceptTrade: { flag: 'tradingMarket', label: 'Trading Market (Milestone D2)' },
   ChooseMajorExit: { flag: 'majors', label: 'Major Arcana Contention (Milestone E)' },
   ResolveEntropy: { flag: 'moonSunCycle', label: 'Moon/Sun Entropy Cycle (Milestone F)' }
 };
 
-function makeEvent(
-  seq: number,
-  turn: number,
-  round: number,
-  phase: GamePhase,
-  rulesetVersion: string,
-  params: {
-    actor: string;
-    type: GameEventType;
-    affectedCardIds: readonly string[];
-    source: string;
-    reason: string;
-    visibility: EventVisibility;
-    summary: string;
-    payload?: Readonly<Record<string, unknown>>;
-  }
-): GameEvent {
-  return {
-    seq,
-    turn,
-    round,
-    phase,
-    rulesetVersion,
-    ...params
-  };
-}
-
-function finalizeState(draft: Omit<GameState, 'stateHash'>): GameState {
-  const stateHash = computeStateHash(draft);
-  const fullState: GameState = { ...draft, stateHash };
-  assertInvariants(fullState);
-  return fullState;
-}
-
-function fail(state: GameState, command: Command, error: ValidationError): DispatchResult {
-  const nextSeq = state.events.length + 1;
-  const rejectionEvent = makeEvent(
-    nextSeq,
-    state.turn,
-    state.round,
-    state.phase,
-    state.ruleset.version,
-    {
-      actor: command.playerId,
-      type: 'CommandRejected',
-      affectedCardIds: [],
-      source: command.type,
-      reason: error.code,
-      visibility: 'public',
-      summary: `Rejected ${command.type} by ${command.playerId}: ${error.message}`,
-      payload: { code: error.code, details: error.details ?? null }
-    }
-  );
-
-  const nextState: GameState = {
-    ...state,
-    rejectedCommands: [...state.rejectedCommands, { atTurn: state.turn, command, error }],
-    events: [...state.events, rejectionEvent]
-  };
-
-  return { ok: false, state: nextState, error };
-}
-
-export function isCardObjectivelyHelpful(
-  recipient: PlayerState,
-  card: Card,
-  ruleset: Ruleset
-): boolean {
-  if (isEligibleEvolution(recipient.lineage, card, ruleset)) return true;
-  if (card.family !== 'classic-number' || !card.color || !card.element) return false;
-  if (card.rank <= recipient.lineage.rank) return false;
-  if (ruleset.allowedEvolutionColors === 'same-element') {
-    return card.element === recipient.lineage.element;
-  }
-  if (ruleset.allowedEvolutionColors === 'same-color') {
-    return card.color === recipient.lineage.color;
-  }
-  return true;
-}
-
-function computeReadingHints(
-  recipient: PlayerState,
-  centerCard: Card,
-  ruleset: Ruleset
-): ReadingHints | null {
-  if (!ruleset.readingTierHintsEnabled) return null;
-  if (recipient.lineage.rank <= 3) return null;
-  if (recipient.lineage.rank <= 6) {
-    return { color: centerCard.color };
-  }
-  return { color: centerCard.color, tier: centerCard.tier };
-}
-
-function createReadingForTurn(
-  players: readonly PlayerState[],
-  activePlayerIndex: number,
-  centerCard: Card,
-  turn: number,
-  round: number,
-  ruleset: Ruleset
-): ReadingRecord {
-  const recipient = players[activePlayerIndex]!;
-  const reader = players[(activePlayerIndex + 1) % players.length]!;
-  return {
-    turn,
-    round,
-    readerId: reader.id,
-    recipientId: recipient.id,
-    centerCardId: centerCard.id,
-    advice: null,
-    hints: null,
-    playerAction: null,
-    adviceFollowed: null,
-    objectiveHelpful: isCardObjectivelyHelpful(recipient, centerCard, ruleset),
-    adviceTruthful: null,
-    resolution: 'pending',
-    readerReward: 'pending',
-    readerRewardReason: null
-  };
-}
-
-function evaluateCompletion(
-  players: readonly PlayerState[],
-  days: readonly string[],
-  center: readonly string[],
-  ruleset: Ruleset
-): GameOutcome | undefined {
-  if (ruleset.stopOnTargetRank && ruleset.l11TargetRank > 0) {
-    const reached = players.filter((p) => p.lineage.rank >= ruleset.l11TargetRank);
-    if (reached.length > 0) {
-      const highestRank = Math.max(...players.map((p) => p.lineage.rank));
-      const winners = players.filter((p) => p.lineage.rank === highestRank).map((p) => p.id);
-      return {
-        reason: 'target_rank_reached',
-        winnerIds: winners,
-        highestRank,
-        summary: `Target rank ${ruleset.l11TargetRank} reached by ${winners.join(', ')}.`
-      };
-    }
-  }
-
-  if (days.length === 0 && center.length === 0) {
-    const highestRank = Math.max(...players.map((p) => p.lineage.rank));
-    const winners = players.filter((p) => p.lineage.rank === highestRank).map((p) => p.id);
-    return {
-      reason: 'days_exhausted',
-      winnerIds: winners,
-      highestRank,
-      summary: `Deck of Days exhausted. Winner of the day (Rank ${highestRank}): ${winners.join(', ')}.`
-    };
-  }
-
-  return undefined;
-}
-
-function applyEvolutionWithEvents(
-  player: PlayerState,
-  cards: Readonly<Record<string, Card>>,
-  ruleset: Ruleset,
-  context: {
-    turn: number;
-    round: number;
-    phase: GamePhase;
-    source: string;
-    nextSeq: () => number;
-  }
-): { player: PlayerState; events: GameEvent[] } {
-  const res = resolveMandatoryEvolutionChain(player, cards, ruleset);
-  if (res.steps.length === 0) {
-    return { player, events: [] };
-  }
-
-  const events: GameEvent[] = [];
-  for (const step of res.steps) {
-    events.push(
-      makeEvent(context.nextSeq(), context.turn, context.round, context.phase, ruleset.version, {
-        actor: player.id,
-        type: 'LineageEvolved',
-        affectedCardIds: [step.toCard.id],
-        source: context.source,
-        reason: step.matchReason,
-        visibility: 'public',
-        summary: `${player.name}: ${step.fromCard.label} evolves to ${step.toCard.label} (${step.matchReason}).`,
-        payload: {
-          fromCardId: step.fromCard.id,
-          toCardId: step.toCard.id,
-          fromRank: step.fromCard.rank,
-          toRank: step.toCard.rank,
-          rankDelta: step.rankDelta,
-          tieBreakPolicy: ruleset.evolutionTieBreak,
-          tieBreakApplied: step.tieBreakApplied,
-          competingCandidateIds: step.competingCandidateIds
-        }
-      })
-    );
-  }
-
-  if (res.steps.length > 1) {
-    events.push(
-      makeEvent(context.nextSeq(), context.turn, context.round, context.phase, ruleset.version, {
-        actor: player.id,
-        type: 'EvolutionChainCompleted',
-        affectedCardIds: res.steps.map((s) => s.toCard.id),
-        source: context.source,
-        reason: 'mandatory-chain',
-        visibility: 'public',
-        summary: `${player.name} completed a ${res.steps.length}-step evolution chain up to Rank ${res.player.lineage.rank} (${cards[res.player.lineage.cardIds[res.player.lineage.cardIds.length - 1]!]!.label}).`,
-        payload: {
-          chainLength: res.steps.length,
-          finalRank: res.player.lineage.rank
-        }
-      })
-    );
-  }
-
-  return { player: res.player, events };
-}
-
 /**
- * Pure deterministic game initializer.
- * Supports optional deterministic card-placement overrides for worked GDD acceptance scenarios (S1–S6).
- */
-export function createGame(
-  ruleset: Ruleset,
-  seed: string,
-  options: CreateGameOptions = {}
-): GameState {
-  if (ruleset.playerCount < 2 || ruleset.playerCount > 4) {
-    throw new Error(`Unsupported playerCount ${ruleset.playerCount}; expected 2..4`);
-  }
-
-  const catalog = buildCardCatalog(ruleset);
-  const allCardIds = Object.keys(catalog).sort();
-  let rngState = seedToUint32(`${ruleset.id}:${ruleset.version}:${seed}`);
-
-  const chosenElements: Element[] = options.startingElements
-    ? [...options.startingElements]
-    : [...ELEMENTS.slice(0, ruleset.playerCount)];
-
-  if (chosenElements.length !== ruleset.playerCount) {
-    throw new Error(`startingElements length must equal ruleset.playerCount (${ruleset.playerCount})`);
-  }
-  if (new Set(chosenElements).size !== chosenElements.length) {
-    throw new Error('Starting elements must be distinct per player');
-  }
-
-  const assignedAceIds = new Set<string>();
-  const players: PlayerState[] = [];
-
-  for (let i = 0; i < ruleset.playerCount; i++) {
-    const element = chosenElements[i]!;
-    const aceId = `classic-${element}-01`;
-    const aceCard = catalog[aceId];
-    if (!aceCard || !aceCard.color) {
-      throw new Error(`Missing starting Ace "${aceId}" in card catalog`);
-    }
-    assignedAceIds.add(aceId);
-    const id = `p${i + 1}`;
-    const name = options.playerNames?.[i] ?? `Player ${i + 1}`;
-    players.push({
-      id,
-      name,
-      primaryElement: element,
-      lineage: {
-        rank: 1,
-        element,
-        color: aceCard.color,
-        cardIds: [aceId]
-      },
-      hand: [],
-      eclipseCount: 0,
-      effectUsedThisTurn: false,
-      pendingReaderBonuses: [],
-      evolutionsCompleted: 0,
-      maxChainLength: 0,
-      turnsTaken: 0
-    });
-  }
-
-  // Reserve and overridden cards handling
-  const overriddenSet = new Set<string>();
-  if (options.overrideHands) {
-    for (const hand of options.overrideHands) {
-      for (const id of hand) {
-        if (!catalog[id]) throw new Error(`Unknown override hand card "${id}"`);
-        if (assignedAceIds.has(id) || overriddenSet.has(id)) {
-          throw new Error(`Duplicate override card "${id}"`);
-        }
-        overriddenSet.add(id);
-      }
-    }
-  }
-  if (options.overrideDaysTop) {
-    for (const id of options.overrideDaysTop) {
-      if (!catalog[id]) throw new Error(`Unknown override Days card "${id}"`);
-      if (assignedAceIds.has(id) || overriddenSet.has(id)) {
-        throw new Error(`Duplicate override card "${id}"`);
-      }
-      overriddenSet.add(id);
-    }
-  }
-
-  const reserve: string[] = [];
-  const poolToShuffle: string[] = [];
-
-  for (const id of allCardIds) {
-    if (assignedAceIds.has(id) || overriddenSet.has(id)) continue;
-    const card = catalog[id]!;
-    if (card.rank === 1 && !ruleset.unusedAcesInDeck) {
-      reserve.push(id);
-    } else {
-      poolToShuffle.push(id);
-    }
-  }
-
-  const shuffled = deterministicShuffle(poolToShuffle, rngState);
-  rngState = shuffled.nextState;
-  const days = [...(options.overrideDaysTop ?? []), ...shuffled.shuffled];
-
-  let seqCounter = 0;
-  const nextSeq = (): number => {
-    seqCounter += 1;
-    return seqCounter;
-  };
-
-  const initialOpenPhase: GamePhase = ruleset.features.readings
-    ? 'AWAITING_READING'
-    : 'AWAITING_CENTER_DECISION';
-
-  const events: GameEvent[] = [
-    makeEvent(nextSeq(), 1, 1, initialOpenPhase, ruleset.version, {
-      actor: 'system',
-      type: 'GameCreated',
-      affectedCardIds: [],
-      source: 'createGame',
-      reason: 'setup',
-      visibility: 'public',
-      summary: `Started ${ruleset.name} (v${ruleset.version}) with seed "${seed}".`,
-      payload: { rulesetId: ruleset.id, rulesetVersion: ruleset.version, seed }
-    })
-  ];
-
-  // Deal starting hands (override or drawn from Days)
-  for (let i = 0; i < players.length; i++) {
-    const dealt: string[] = [];
-    if (options.overrideHands?.[i]) {
-      dealt.push(...options.overrideHands[i]!);
-    } else {
-      for (let c = 0; c < ruleset.startingHandSize && days.length > 0; c++) {
-        dealt.push(days.shift()!);
-      }
-    }
-    players[i] = { ...players[i]!, hand: dealt };
-
-    if (dealt.length > 0) {
-      events.push(
-        makeEvent(nextSeq(), 1, 1, initialOpenPhase, ruleset.version, {
-          actor: players[i]!.id,
-          type: 'CardMoved',
-          affectedCardIds: dealt,
-          source: 'setup-deal',
-          reason: 'starting-hand',
-          visibility: 'private_to_actor',
-          summary: `${players[i]!.name} received starting hand: ${dealt.map((id) => catalog[id]!.label).join(', ')}.`,
-          payload: { from: 'days', to: 'hand', count: dealt.length }
-        })
-      );
-    }
-  }
-
-  // Enforce mandatory personal evolution immediately on initial hands
-  for (let i = 0; i < players.length; i++) {
-    const evo = applyEvolutionWithEvents(players[i]!, catalog, ruleset, {
-      turn: 1,
-      round: 1,
-      phase: initialOpenPhase,
-      source: 'setup-deal',
-      nextSeq
-    });
-    players[i] = evo.player;
-    events.push(...evo.events);
-  }
-
-  // Populate Turn 1 Board: Left Event (concealed until Center pursued) + Center (concealed for Reading)
-  const boardEvent: string[] = [];
-  let eventRevealed = false;
-  if (ruleset.features.barriersAndTrials && days.length > 0 && ruleset.boardOccupancyLimits.event >= 1) {
-    const firstEventId = days.shift()!;
-    const firstEventCard = catalog[firstEventId]!;
-    boardEvent.push(firstEventId);
-    eventRevealed = false;
-
-    events.push(
-      makeEvent(nextSeq(), 1, 1, initialOpenPhase, ruleset.version, {
-        actor: 'system',
-        type: 'CardMoved',
-        affectedCardIds: [],
-        source: 'turn-setup',
-        reason: 'populate-event-concealed',
-        visibility: 'public',
-        summary: `Turn 1 Event card placed face-down in Left slot (${firstEventCard.backGroup} back).`,
-        payload: { from: 'days', to: 'event', concealed: true }
-      })
-    );
-    events.push(
-      makeEvent(nextSeq(), 1, 1, initialOpenPhase, ruleset.version, {
-        actor: 'system',
-        type: 'CardMoved',
-        affectedCardIds: [firstEventId],
-        source: 'turn-setup',
-        reason: 'populate-event-admin-detail',
-        visibility: 'admin_only',
-        summary: `[Admin] Turn 1 concealed Left Event is ${firstEventCard.label} (${eventCardToReality(firstEventCard)}, ${firstEventCard.vp} VP).`,
-        payload: { from: 'days', to: 'event', cardId: firstEventId }
-      })
-    );
-  }
-
-  const boardCenter: string[] = [];
-  let centerRevealed = !ruleset.features.readings;
-  let currentReading: ReadingRecord | null = null;
-
-  if (days.length > 0 && ruleset.boardOccupancyLimits.center >= 1) {
-    const firstCenterId = days.shift()!;
-    const firstCenterCard = catalog[firstCenterId]!;
-    boardCenter.push(firstCenterId);
-
-    if (ruleset.features.readings) {
-      centerRevealed = false;
-      currentReading = createReadingForTurn(players, 0, firstCenterCard, 1, 1, ruleset);
-      events.push(
-        makeEvent(nextSeq(), 1, 1, 'AWAITING_READING', ruleset.version, {
-          actor: 'system',
-          type: 'CardMoved',
-          affectedCardIds: [],
-          source: 'turn-setup',
-          reason: 'populate-center-concealed',
-          visibility: 'public',
-          summary: `Turn 1 concealed card placed in Center (${firstCenterCard.backGroup} back). Waiting for ${players[1]!.name}'s reading.`,
-          payload: { from: 'days', to: 'center', concealed: true, backGroup: firstCenterCard.backGroup }
-        })
-      );
-      events.push(
-        makeEvent(nextSeq(), 1, 1, 'AWAITING_READING', ruleset.version, {
-          actor: 'system',
-          type: 'CardMoved',
-          affectedCardIds: [firstCenterId],
-          source: 'turn-setup',
-          reason: 'populate-center-admin-detail',
-          visibility: 'admin_only',
-          summary: `[Admin] Turn 1 concealed Center card is ${firstCenterCard.label}.`,
-          payload: { from: 'days', to: 'center', cardId: firstCenterId }
-        })
-      );
-    } else {
-      centerRevealed = true;
-      events.push(
-        makeEvent(nextSeq(), 1, 1, 'AWAITING_CENTER_DECISION', ruleset.version, {
-          actor: 'system',
-          type: 'CardMoved',
-          affectedCardIds: [firstCenterId],
-          source: 'turn-setup',
-          reason: 'populate-center',
-          visibility: 'public',
-          summary: `Turn 1 Center revealed: ${firstCenterCard.label}.`,
-          payload: { from: 'days', to: 'center' }
-        })
-      );
-    }
-  }
-
-  const outcome = evaluateCompletion(players, days, boardCenter, ruleset);
-  const phase: GamePhase = outcome
-    ? 'GAME_OVER'
-    : boardCenter.length === 0
-      ? 'READY_TO_END_TURN'
-      : ruleset.features.readings
-        ? 'AWAITING_READING'
-        : 'AWAITING_CENTER_DECISION';
-
-  if (outcome) {
-    currentReading = null;
-    events.push(
-      makeEvent(nextSeq(), 1, 1, 'GAME_OVER', ruleset.version, {
-        actor: 'system',
-        type: 'GameCompleted',
-        affectedCardIds: [],
-        source: 'setup-completion',
-        reason: outcome.reason,
-        visibility: 'public',
-        summary: outcome.summary,
-        payload: { ...outcome }
-      })
-    );
-  } else {
-    events.push(
-      makeEvent(nextSeq(), 1, 1, phase, ruleset.version, {
-        actor: players[0]!.id,
-        type: 'TurnStarted',
-        affectedCardIds: [],
-        source: 'turn-cycle',
-        reason: 'turn-begin',
-        visibility: 'public',
-        summary: `Round 1, Turn 1 — ${players[0]!.name}'s turn.`
-      })
-    );
-  }
-
-  return finalizeState({
-    engineVersion: ENGINE_VERSION,
-    ruleset,
-    seed,
-    rngState,
-    cards: catalog,
-    deckCardIds: allCardIds,
-    phase,
-    round: 1,
-    turn: 1,
-    activePlayerIndex: 0,
-    activePlayerId: players[0]!.id,
-    days,
-    veil: [],
-    reserve,
-    board: { event: boardEvent, center: boardCenter, parallel: [] },
-    eventRevealed,
-    centerRevealed,
-    centerAbandoned: false,
-    abandonedByPlayerId: null,
-    currentReading,
-    readingHistory: [],
-    majorPending: [],
-    players,
-    activeEffects: [],
-    connections: [],
-    entropy: { active: false, cycleIndex: 0 },
-    status: outcome ? 'completed' : 'playing',
-    outcome,
-    commandHistory: [],
-    rejectedCommands: [],
-    events
-  });
-}
-
-/**
- * Pure deterministic command dispatcher implementing Milestones A + B + C.
+ * Pure deterministic command dispatcher implementing Milestones A + B + C + D0 + D1.
  */
 export function dispatch(state: GameState, command: Command): DispatchResult {
   const futureGate = FUTURE_FEATURE_COMMANDS[command.type];
@@ -650,113 +142,207 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
     hand: [...p.hand],
     pendingReaderBonuses: [...p.pendingReaderBonuses]
   }));
-  const days = [...state.days];
-  const veil = [...state.veil];
-  const boardEvent = [...state.board.event];
-  const boardCenter = [...state.board.center];
-  const boardParallel = [...state.board.parallel];
+  let days = [...state.days];
+  let veil = [...state.veil];
+  let boardEvent = [...state.board.event];
+  let boardCenter = [...state.board.center];
+  let boardParallel = [...state.board.parallel];
+  let majorPending: MajorPendingEntry[] = state.majorPending.map((m) => ({ ...m }));
   let eventRevealed = state.eventRevealed;
   let centerRevealed = state.centerRevealed;
   let centerAbandoned = state.centerAbandoned;
   let abandonedByPlayerId = state.abandonedByPlayerId;
+  let discardedCenterThisTurn = state.discardedCenterThisTurn;
+  let rngState = state.rngState;
   let currentReading: ReadingRecord | null = state.currentReading ? { ...state.currentReading } : null;
   const readingHistory: ReadingRecord[] = [...state.readingHistory];
+  let pendingEarthReorder: PendingEarthReorderState | null = state.pendingEarthReorder
+    ? { ...state.pendingEarthReorder, peekedCardIds: [...state.pendingEarthReorder.peekedCardIds] }
+    : null;
   let phase: GamePhase = state.phase;
   let turn = state.turn;
   let round = state.round;
   let activePlayerIndex = state.activePlayerIndex;
   let activePlayerId = state.activePlayerId;
+  let comboOutcome: GameOutcome | undefined;
 
   const activePlayer = players[state.activePlayerIndex]!;
 
-  const finalizeReadingReward = (
-    reading: ReadingRecord,
-    resolution: 'claimed' | 'discarded' | 'abandoned',
-    sourceCard: Card
-  ): void => {
-    const readerIdx = players.findIndex((p) => p.id === reading.readerId);
-    const reader = readerIdx >= 0 ? players[readerIdx]! : null;
+  const makeMajorBoardCtx = (): MajorMutableBoard => ({
+    cards: state.cards,
+    ruleset: state.ruleset,
+    turn,
+    round,
+    phase,
+    activePlayerIndex,
+    players,
+    days,
+    veil,
+    boardEvent,
+    boardCenter,
+    boardParallel,
+    eventRevealed,
+    centerRevealed,
+    centerAbandoned,
+    abandonedByPlayerId,
+    majorPending,
+    newEvents,
+    nextSeq
+  });
 
-    let grant = false;
-    let trigger: 'good_claimed' | 'bad_discarded' | 'good_abandoned' | null = null;
-    let reason = 'advice_not_followed';
+  const syncFromMajorBoardCtx = (ctx: MajorMutableBoard): void => {
+    days = ctx.days;
+    veil = ctx.veil;
+    boardEvent = ctx.boardEvent;
+    boardCenter = ctx.boardCenter;
+    boardParallel = ctx.boardParallel;
+    eventRevealed = ctx.eventRevealed;
+    centerRevealed = ctx.centerRevealed;
+    centerAbandoned = ctx.centerAbandoned;
+    abandonedByPlayerId = ctx.abandonedByPlayerId;
+    majorPending = ctx.majorPending;
+  };
 
-    if (reading.adviceFollowed) {
-      if (reading.advice === 'bad' && resolution === 'discarded') {
-        grant = true;
-        trigger = 'bad_discarded';
-        reason = 'followed_bad_advice_discarded';
-      } else if (reading.advice === 'good' && resolution === 'claimed') {
-        grant = true;
-        trigger = 'good_claimed';
-        reason = 'followed_good_advice_claimed';
-      } else if (reading.advice === 'good' && resolution === 'abandoned') {
-        if (state.ruleset.readerBonusOnAbandon) {
-          grant = true;
-          trigger = 'good_abandoned';
-          reason = 'followed_good_advice_abandoned_override';
-        } else {
-          grant = false;
-          reason = 'abandoned_before_claim';
-        }
+  const applyComboOutcomeIfAny = (found: GameOutcome | undefined, source: string): boolean => {
+    if (!found) return false;
+    comboOutcome = found;
+    phase = 'GAME_OVER';
+    currentReading = null;
+    newEvents.push(
+      makeEvent(nextSeq(), turn, round, 'GAME_OVER', state.ruleset.version, {
+        actor: 'system',
+        type: 'GameCompleted',
+        affectedCardIds: [],
+        source,
+        reason: found.reason,
+        visibility: 'public',
+        summary: found.summary,
+        payload: { ...found }
+      })
+    );
+    return true;
+  };
+
+  const runComboCheck = (source: string): boolean => {
+    if (!state.ruleset.features.eclipse && !state.ruleset.features.triangulation) return false;
+    const mctx = makeMajorBoardCtx();
+    const res = evaluateCombos(mctx);
+    syncFromMajorBoardCtx(mctx);
+    return applyComboOutcomeIfAny(res, source);
+  };
+
+  const populateEventSlotFromDays = (source: string): boolean => {
+    if (
+      !state.ruleset.features.barriersAndTrials ||
+      boardEvent.length > 0 ||
+      days.length === 0 ||
+      state.ruleset.boardOccupancyLimits.event < 1
+    ) {
+      return false;
+    }
+    const mctx = makeMajorBoardCtx();
+    const drawEv = drawNextMinorRoutingMajors(mctx, 'event', source);
+    syncFromMajorBoardCtx(mctx);
+    if (applyComboOutcomeIfAny(drawEv.outcome, source)) {
+      return true;
+    }
+    if (drawEv.minorCardId) {
+      const nextEventId = drawEv.minorCardId;
+      const nextEventCard = state.cards[nextEventId]!;
+      boardEvent.push(nextEventId);
+      eventRevealed = false;
+      newEvents.push(
+        makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
+          actor: 'system',
+          type: 'CardMoved',
+          affectedCardIds: [],
+          source,
+          reason: 'populate-event-concealed',
+          visibility: 'public',
+          summary: `Turn ${turn} Event card placed face-down in Left slot (${nextEventCard.backGroup} back).`,
+          payload: { from: 'days', to: 'event', concealed: true }
+        })
+      );
+      newEvents.push(
+        makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
+          actor: 'system',
+          type: 'CardMoved',
+          affectedCardIds: [nextEventId],
+          source,
+          reason: 'populate-event-admin-detail',
+          visibility: 'admin_only',
+          summary: `[Admin] Turn ${turn} concealed Left Event is ${nextEventCard.label} (${eventCardToReality(nextEventCard)}, ${nextEventCard.vp} VP).`,
+          payload: { from: 'days', to: 'event', cardId: nextEventId }
+        })
+      );
+    }
+    return false;
+  };
+
+  const populateParallelSlotFromDays = (source: string): boolean => {
+    if (
+      state.ruleset.emptyChamberMode ||
+      boardParallel.length > 0 ||
+      days.length === 0 ||
+      state.ruleset.boardOccupancyLimits.parallel < 1
+    ) {
+      return false;
+    }
+    const rightId = days.shift()!;
+    const rightCard = state.cards[rightId]!;
+    if (state.ruleset.features.majors && isMajorCard(rightCard)) {
+      const mctx = makeMajorBoardCtx();
+      const outcome = placeDrawnMajorOnBoard(mctx, rightId, source);
+      syncFromMajorBoardCtx(mctx);
+      return applyComboOutcomeIfAny(outcome, source);
+    }
+    boardParallel.push(rightId);
+    newEvents.push(
+      makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
+        actor: 'system',
+        type: 'CardMoved',
+        affectedCardIds: [],
+        source,
+        reason: 'populate-parallel-concealed',
+        visibility: 'public',
+        summary: `Turn ${turn} Right chamber populated face-down (${rightCard.backGroup} back).`,
+        payload: { from: 'days', to: 'parallel', concealed: true, backGroup: rightCard.backGroup }
+      })
+    );
+    newEvents.push(
+      makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
+        actor: 'system',
+        type: 'CardMoved',
+        affectedCardIds: [rightId],
+        source,
+        reason: 'populate-parallel-admin-detail',
+        visibility: 'admin_only',
+        summary: `[Admin] Turn ${turn} concealed Right chamber card is ${rightCard.label}.`,
+        payload: { from: 'days', to: 'parallel', cardId: rightId }
+      })
+    );
+    return false;
+  };
+
+  const resolvePostEncounterPhase = (): GamePhase => {
+    const currentActive = players[state.activePlayerIndex]!;
+    if (currentActive.hand.length > state.ruleset.maxHandSize) {
+      return 'AWAITING_HAND_DISCARD';
+    }
+    if (
+      state.ruleset.features.elementalEffects &&
+      state.ruleset.elementalTiming === 'after_encounter'
+    ) {
+      const hasAvailableBonus =
+        getAvailableReaderBonusesForTurn(currentActive, turn, state.ruleset).length > 0;
+      const canAct =
+        !currentActive.effectUsedThisTurn ||
+        (!state.ruleset.readerBonusConsumesTurnAction && hasAvailableBonus);
+      if (canAct) {
+        return 'AWAITING_ELEMENTAL_ACTION';
       }
     }
-
-    const completedRecord: ReadingRecord = {
-      ...reading,
-      resolution,
-      readerReward: grant ? 'granted' : 'withheld',
-      readerRewardReason: reason
-    };
-    readingHistory.push(completedRecord);
-
-    if (grant && reader && trigger) {
-      const bonus = {
-        id: `rb-t${turn}-${reader.pendingReaderBonuses.length + 1}`,
-        earnedOnTurn: turn,
-        fromPlayerId: activePlayer.id,
-        sourceCardId: sourceCard.id,
-        sourceElement: sourceCard.element,
-        trigger,
-        status: 'pending_spec' as const
-      };
-      players[readerIdx] = {
-        ...reader,
-        pendingReaderBonuses: [...reader.pendingReaderBonuses, bonus]
-      };
-      newEvents.push(
-        makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
-          actor: reader.id,
-          type: 'ReaderRewardGranted',
-          affectedCardIds: [sourceCard.id],
-          source: 'reading-resolution',
-          reason,
-          visibility: 'public',
-          summary: `${reader.name} earned a pending Reader elemental bonus (${sourceCard.element ?? 'neutral'} from ${sourceCard.label}; ${reason}).`,
-          payload: { ...bonus, adviceTruthful: completedRecord.adviceTruthful }
-        })
-      );
-    } else if (reader) {
-      newEvents.push(
-        makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
-          actor: reader.id,
-          type: 'ReaderRewardWithheld',
-          affectedCardIds: [sourceCard.id],
-          source: 'reading-resolution',
-          reason,
-          visibility: 'public',
-          summary: `${reader.name}'s Reader bonus was withheld (${reason}).`,
-          payload: {
-            readerId: reader.id,
-            advice: completedRecord.advice,
-            playerAction: completedRecord.playerAction,
-            resolution,
-            adviceFollowed: completedRecord.adviceFollowed,
-            adviceTruthful: completedRecord.adviceTruthful
-          }
-        })
-      );
-    }
+    return 'READY_TO_END_TURN';
   };
 
   const claimCenterAndEvolve = (sourceName: string): Card => {
@@ -785,9 +371,12 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
     return claimedCard;
   };
 
-  const moveResolvedEventToVeil = (reason: string): void => {
+  const moveResolvedEventToVeil = (reason: string, summaryPrefix = 'Resolved Left Event'): void => {
     if (boardEvent.length === 0) return;
-    const evId = boardEvent.shift()!;
+    const evId = boardEvent[0]!;
+    // Classic Court (Major) standing in Left Event remains on the Board for Eclipse/Triangulation!
+    if (isMajorCard(state.cards[evId])) return;
+    boardEvent.shift();
     eventRevealed = false;
     veil.push(evId);
     newEvents.push(
@@ -798,31 +387,49 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
         source: 'event-cleanup',
         reason,
         visibility: 'public',
-        summary: `Resolved Left Event (${state.cards[evId]!.label}) moved to the Veil.`,
+        summary: `${summaryPrefix} (${state.cards[evId]!.label}) moved to the Veil.`,
         payload: { from: 'event', to: 'veil' }
       })
     );
   };
 
-  const dealFreshConcealedCenterForReading = (sourceName: string): void => {
+  const dealFreshConcealedCenterForReading = (
+    sourceName: string,
+    deferReadingForPreElemental = false
+  ): boolean => {
     if (days.length === 0 || state.ruleset.boardOccupancyLimits.center < 1) {
       phase = 'READY_TO_END_TURN';
-      return;
+      return false;
     }
-    const nextCenterId = days.shift()!;
+    const mctx = makeMajorBoardCtx();
+    const drawCtr = drawNextMinorRoutingMajors(mctx, 'center', sourceName);
+    syncFromMajorBoardCtx(mctx);
+    if (applyComboOutcomeIfAny(drawCtr.outcome, sourceName)) {
+      return true;
+    }
+    if (!drawCtr.minorCardId) {
+      phase = 'READY_TO_END_TURN';
+      return false;
+    }
+    const nextCenterId = drawCtr.minorCardId;
     const nextCenterCard = state.cards[nextCenterId]!;
     boardCenter.push(nextCenterId);
     centerRevealed = false;
-    currentReading = createReadingForTurn(
-      players,
-      activePlayerIndex,
-      nextCenterCard,
-      turn,
-      round,
-      state.ruleset
-    );
     const reader = players[(activePlayerIndex + 1) % players.length]!;
-    phase = 'AWAITING_READING';
+    if (deferReadingForPreElemental) {
+      currentReading = null;
+      phase = 'AWAITING_ELEMENTAL_ACTION';
+    } else {
+      currentReading = createReadingForTurn(
+        players,
+        activePlayerIndex,
+        nextCenterCard,
+        turn,
+        round,
+        state.ruleset
+      );
+      phase = 'AWAITING_READING';
+    }
 
     newEvents.push(
       makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
@@ -832,7 +439,9 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
         source: sourceName,
         reason: 'populate-center-concealed',
         visibility: 'public',
-        summary: `Turn ${turn} concealed card placed in Center (${nextCenterCard.backGroup} back). Waiting for ${reader.name}'s reading.`,
+        summary: deferReadingForPreElemental
+          ? `Turn ${turn} concealed card placed in Center (${nextCenterCard.backGroup} back). Optional Elemental Prep open before Reading.`
+          : `Turn ${turn} concealed card placed in Center (${nextCenterCard.backGroup} back). Waiting for ${reader.name}'s reading.`,
         payload: { from: 'days', to: 'center', concealed: true, backGroup: nextCenterCard.backGroup }
       })
     );
@@ -848,6 +457,241 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
         payload: { from: 'days', to: 'center', cardId: nextCenterId }
       })
     );
+    return false;
+  };
+
+  const enterReadingOrAbandonedPhase = (sourceName: string): void => {
+    if (populateEventSlotFromDays(sourceName)) return;
+    if (centerAbandoned && boardCenter.length > 0) {
+      phase = 'AWAITING_ABANDONED_CHOICE';
+      currentReading = null;
+      return;
+    }
+    if (boardCenter.length > 0) {
+      const existingCenterId = boardCenter[0]!;
+      const existingCenterCard = state.cards[existingCenterId]!;
+      if (state.ruleset.features.readings) {
+        centerRevealed = false;
+        currentReading = createReadingForTurn(
+          players,
+          activePlayerIndex,
+          existingCenterCard,
+          turn,
+          round,
+          state.ruleset
+        );
+        phase = 'AWAITING_READING';
+      } else {
+        centerRevealed = true;
+        currentReading = null;
+        phase = 'AWAITING_CENTER_DECISION';
+      }
+      return;
+    }
+    if (days.length > 0) {
+      if (state.ruleset.features.readings) {
+        dealFreshConcealedCenterForReading(sourceName, false);
+      } else {
+        const nextCenterId = days.shift()!;
+        boardCenter.push(nextCenterId);
+        centerRevealed = true;
+        currentReading = null;
+        phase = 'AWAITING_CENTER_DECISION';
+      }
+      return;
+    }
+    phase = 'READY_TO_END_TURN';
+  };
+
+  const makeElementalContext = (): ElementalMutableContext => ({
+    cards: state.cards,
+    ruleset: state.ruleset,
+    turn,
+    round,
+    phase,
+    activePlayerIndex: state.activePlayerIndex,
+    players,
+    days,
+    veil,
+    boardEvent,
+    boardCenter,
+    boardParallel,
+    majorPending,
+    eventRevealed,
+    centerRevealed,
+    centerAbandoned,
+    abandonedByPlayerId,
+    rngState,
+    newEvents,
+    nextSeq
+  });
+
+  const syncFromElementalContext = (ctx: ElementalMutableContext): void => {
+    days = ctx.days;
+    veil = ctx.veil;
+    boardEvent = ctx.boardEvent;
+    boardCenter = ctx.boardCenter;
+    boardParallel = ctx.boardParallel;
+    majorPending = ctx.majorPending;
+    eventRevealed = ctx.eventRevealed;
+    centerRevealed = ctx.centerRevealed;
+    centerAbandoned = ctx.centerAbandoned;
+    abandonedByPlayerId = ctx.abandonedByPlayerId;
+    rngState = ctx.rngState;
+  };
+
+  /**
+   * R1.1 Revealed-Board Elemental Intervention reconciliation:
+   * - Guarantees replacing/removing a revealed Event ALWAYS produces another valid revealed Event
+   *   (never silently turning a failed Trial into a free claim).
+   * - Cleanly settles any pending Reading reward as withheld if the read Center card was removed or altered.
+   * - If revealed Center is removed, clears any remaining Minor Event to Veil and advances to turn completion.
+   */
+  const reconcilePostRevealedBoardMutation = (
+    sourceName: string,
+    prevEventId: string | null,
+    prevCenterId: string | null
+  ): void => {
+    const settleReadingAsAltered = (reason: 'center_removed_by_elemental' | 'center_altered_by_elemental'): void => {
+      if (!currentReading) return;
+      const origCard = prevCenterId ? state.cards[prevCenterId] : undefined;
+      if (origCard) {
+        finalizeReadingReward({
+          reading: currentReading,
+          resolution: 'abandoned',
+          sourceCard: origCard,
+          activePlayerId: activePlayer.id,
+          players,
+          readingHistory,
+          newEvents,
+          turn,
+          round,
+          phase,
+          ruleset: state.ruleset,
+          nextSeq,
+          overrideWithheldReason: reason
+        });
+      }
+      currentReading = null;
+    };
+
+    // Case 1: Revealed Center was removed -> end encounter cleanly (no free abandoned handout)
+    if (boardCenter.length === 0) {
+      settleReadingAsAltered('center_removed_by_elemental');
+      if (boardEvent.length > 0 && !isMajorCard(state.cards[boardEvent[0]!])) {
+        moveResolvedEventToVeil(
+          'event-cleared-after-center-removed',
+          'Revealed Left Event cleared after Center was removed'
+        );
+      }
+      phase = resolvePostEncounterPhase();
+      return;
+    }
+
+    // Case 2: Revealed Center card was swapped/replaced -> keep face-up and settle original reading
+    centerRevealed = true;
+    if (prevCenterId && boardCenter[0] !== prevCenterId) {
+      settleReadingAsAltered('center_altered_by_elemental');
+    }
+
+    // Case 3: Revealed Event was removed -> immediately draw & flip a replacement Event from Days!
+    if (boardEvent.length === 0) {
+      if (days.length > 0) {
+        const mctx = makeMajorBoardCtx();
+        const drawEv = drawNextMinorRoutingMajors(mctx, 'event', `${sourceName}-event-replacement`);
+        syncFromMajorBoardCtx(mctx);
+        if (applyComboOutcomeIfAny(drawEv.outcome, `${sourceName}-event-replacement`)) {
+          return;
+        }
+        if (drawEv.minorCardId) {
+          const repId = drawEv.minorCardId;
+          const repCard = state.cards[repId]!;
+          boardEvent.push(repId);
+          eventRevealed = true;
+          const reality = eventCardToReality(repCard);
+          newEvents.push(
+            makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
+              actor: 'system',
+              type: 'CardMoved',
+              affectedCardIds: [repId],
+              source: sourceName,
+              reason: 'replacement-event-after-elemental',
+              visibility: 'public',
+              summary: `Replacement Left Event drawn from Deck of Days: ${repCard.label} (${repCard.vp} VP).`,
+              payload: { from: 'days', to: 'event', replacement: true }
+            })
+          );
+          newEvents.push(
+            makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
+              actor: 'system',
+              type: 'EventRevealed',
+              affectedCardIds: [repId],
+              source: sourceName,
+              reason: `left-event-replaced-${reality}`,
+              visibility: 'public',
+              summary: `Replacement Left Event revealed: ${repCard.label} (${repCard.vp} VP) → ${reality.toUpperCase()}!`,
+              payload: {
+                eventCardId: repId,
+                eventVP: repCard.vp,
+                eventElement: repCard.element ?? null,
+                reality
+              }
+            })
+          );
+        } else if (boardEvent.length > 0) {
+          const evId = boardEvent[0]!;
+          const evCard = state.cards[evId]!;
+          eventRevealed = true;
+          const reality = eventCardToReality(evCard);
+          newEvents.push(
+            makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
+              actor: 'system',
+              type: 'EventRevealed',
+              affectedCardIds: [evId],
+              source: sourceName,
+              reason: `left-event-replaced-${reality}`,
+              visibility: 'public',
+              summary: `Replacement Left Event revealed: ${evCard.label} (${evCard.vp} VP) → ${reality.toUpperCase()}!`,
+              payload: {
+                eventCardId: evId,
+                eventVP: evCard.vp,
+                eventElement: evCard.element ?? null,
+                reality
+              }
+            })
+          );
+        }
+      }
+      phase = boardEvent.length > 0 ? 'AWAITING_EVENT_RESOLUTION' : resolvePostEncounterPhase();
+      return;
+    }
+
+    // Case 4: Revealed Event was swapped/replaced in place -> keep face-up and emit EventRevealed!
+    eventRevealed = true;
+    if (prevEventId && boardEvent[0] !== prevEventId) {
+      const newEvId = boardEvent[0]!;
+      const newEvCard = state.cards[newEvId]!;
+      const reality = eventCardToReality(newEvCard);
+      newEvents.push(
+        makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
+          actor: 'system',
+          type: 'EventRevealed',
+          affectedCardIds: [newEvId],
+          source: sourceName,
+          reason: `left-event-replaced-${reality}`,
+          visibility: 'public',
+          summary: `New Left Event revealed after elemental intervention: ${newEvCard.label} (${newEvCard.vp} VP) → ${reality.toUpperCase()}!`,
+          payload: {
+            eventCardId: newEvId,
+            eventVP: newEvCard.vp,
+            eventElement: newEvCard.element ?? null,
+            reality
+          }
+        })
+      );
+    }
+
+    phase = 'AWAITING_EVENT_RESOLUTION';
   };
 
   switch (command.type) {
@@ -861,23 +705,33 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
 
       const claimedId = boardCenter[0]!;
       const claimedCard = state.cards[claimedId]!;
+      const skipsPrepToo = state.ruleset.abandonedClaimPolicy === 'free_no_prep';
       newEvents.push(
         makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
           actor: activePlayer.id,
           type: 'AbandonedCardClaimed',
           affectedCardIds: [claimedId],
           source: 'ClaimAbandonedCard',
-          reason: 'free-treasure-instead-of-reading',
+          reason: skipsPrepToo
+            ? 'free-treasure-skips-reading-and-prep'
+            : 'free-treasure-instead-of-reading',
           visibility: 'public',
-          summary: `${activePlayer.name} claimed abandoned ${claimedCard.label} as free Treasure (forfeiting this turn's reading).`
+          summary: skipsPrepToo
+            ? `${activePlayer.name} claimed abandoned ${claimedCard.label} as free Treasure (forfeiting this turn's Reading and Elemental Prep).`
+            : `${activePlayer.name} claimed abandoned ${claimedCard.label} as free Treasure (forfeiting this turn's reading).`
         })
       );
 
       claimCenterAndEvolve('ClaimAbandonedCard');
-
-      const postHand = players[state.activePlayerIndex]!.hand;
-      phase =
-        postHand.length > state.ruleset.maxHandSize ? 'AWAITING_HAND_DISCARD' : 'READY_TO_END_TURN';
+      if (skipsPrepToo) {
+        const currentActive = players[state.activePlayerIndex]!;
+        phase =
+          currentActive.hand.length > state.ruleset.maxHandSize
+            ? 'AWAITING_HAND_DISCARD'
+            : 'READY_TO_END_TURN';
+      } else {
+        phase = resolvePostEncounterPhase();
+      }
       break;
     }
 
@@ -903,12 +757,94 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
           source: 'DeclineAbandonedCard',
           reason: state.ruleset.declinedAbandonedPolicy,
           visibility: 'public',
-          summary: `${activePlayer.name} declined abandoned ${declinedCard.label} → moved to the Veil to take a fresh reading.`,
+          summary: `${activePlayer.name} declined abandoned ${declinedCard.label} → moved to the Veil to take a normal turn.`,
           payload: { policy: state.ruleset.declinedAbandonedPolicy }
         })
       );
 
-      if (state.ruleset.features.readings) {
+      if (state.ruleset.abandonedClaimPolicy === 'free_no_prep') {
+        const preReadingRequested =
+          state.ruleset.features.elementalEffects &&
+          state.ruleset.elementalTiming === 'before_reading';
+        const canPrepAfterDecline =
+          preReadingRequested &&
+          hasAnyLegalElementalAction({
+            player: players[state.activePlayerIndex]!,
+            cards: state.cards,
+            turn,
+            ruleset: state.ruleset,
+            daysCount: days.length,
+            veilCount: veil.length,
+            boardOccupiedCount: boardEvent.length + boardParallel.length + 1
+          });
+
+        if (
+          !state.ruleset.emptyChamberMode &&
+          boardParallel.length > 0 &&
+          !isMajorCard(state.cards[boardParallel[0]!])
+        ) {
+          const slidId = boardParallel.shift()!;
+          const slidCard = state.cards[slidId]!;
+          boardCenter.push(slidId);
+          centerRevealed = !state.ruleset.features.readings;
+          const reader = players[(activePlayerIndex + 1) % players.length]!;
+          if (!state.ruleset.features.readings) {
+            currentReading = null;
+            phase = 'AWAITING_CENTER_DECISION';
+          } else if (canPrepAfterDecline) {
+            currentReading = null;
+            phase = 'AWAITING_ELEMENTAL_ACTION';
+          } else {
+            currentReading = createReadingForTurn(
+              players,
+              activePlayerIndex,
+              slidCard,
+              turn,
+              round,
+              state.ruleset
+            );
+            phase = 'AWAITING_READING';
+          }
+          newEvents.push(
+            makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
+              actor: 'system',
+              type: 'CardMoved',
+              affectedCardIds: [],
+              source: 'DeclineAbandonedCard',
+              reason: 'slide-parallel-to-center',
+              visibility: 'public',
+              summary: canPrepAfterDecline
+                ? `Turn ${turn}: Right chamber card slid into Center (${slidCard.backGroup} back). Optional Elemental Prep open before Reading.`
+                : `Turn ${turn}: Right chamber card slid into Center (${slidCard.backGroup} back). Waiting for ${reader.name}'s reading.`,
+              payload: { from: 'parallel', to: 'center', concealed: !centerRevealed }
+            })
+          );
+          newEvents.push(
+            makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
+              actor: 'system',
+              type: 'CardMoved',
+              affectedCardIds: [slidId],
+              source: 'DeclineAbandonedCard',
+              reason: 'slide-parallel-to-center-admin',
+              visibility: 'admin_only',
+              summary: `[Admin] Turn ${turn} slid ${slidCard.label} from Right chamber to Center after decline.`,
+              payload: { from: 'parallel', to: 'center', cardId: slidId }
+            })
+          );
+          populateParallelSlotFromDays('DeclineAbandonedCard');
+        } else if (state.ruleset.features.readings) {
+          if (!dealFreshConcealedCenterForReading('DeclineAbandonedCard', canPrepAfterDecline)) {
+            populateParallelSlotFromDays('DeclineAbandonedCard');
+          }
+        } else if (days.length > 0) {
+          const nextId = days.shift()!;
+          boardCenter.push(nextId);
+          centerRevealed = true;
+          phase = 'AWAITING_CENTER_DECISION';
+        } else {
+          phase = resolvePostEncounterPhase();
+        }
+      } else if (state.ruleset.features.readings) {
         dealFreshConcealedCenterForReading('DeclineAbandonedCard');
       } else if (days.length > 0) {
         const nextId = days.shift()!;
@@ -916,7 +852,7 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
         centerRevealed = true;
         phase = 'AWAITING_CENTER_DECISION';
       } else {
-        phase = 'READY_TO_END_TURN';
+        phase = resolvePostEncounterPhase();
       }
       break;
     }
@@ -1007,7 +943,6 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
         })
       );
 
-      // If Event Realities (Milestone C) are enabled and an Event card exists, reveal Left Event!
       if (state.ruleset.features.barriersAndTrials && boardEvent.length > 0) {
         const eventId = boardEvent[0]!;
         const eventCard = state.cards[eventId]!;
@@ -1033,14 +968,23 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
           })
         );
       } else {
-        // Tutorial 1.2 (no Event realities) OR Days exhausted so no Event card left -> frictionless claim
         claimCenterAndEvolve('PursueCenter');
-        finalizeReadingReward(currentReading, 'claimed', centerCard);
+        finalizeReadingReward({
+          reading: currentReading,
+          resolution: 'claimed',
+          sourceCard: centerCard,
+          activePlayerId: activePlayer.id,
+          players,
+          readingHistory,
+          newEvents,
+          turn,
+          round,
+          phase,
+          ruleset: state.ruleset,
+          nextSeq
+        });
         currentReading = null;
-
-        const postHand = players[state.activePlayerIndex]!.hand;
-        phase =
-          postHand.length > state.ruleset.maxHandSize ? 'AWAITING_HAND_DISCARD' : 'READY_TO_END_TURN';
+        phase = resolvePostEncounterPhase();
       }
       break;
     }
@@ -1063,6 +1007,7 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
       const discardedCard = state.cards[discardedId]!;
       const adviceFollowed = currentReading.advice === 'bad';
       centerRevealed = true;
+      discardedCenterThisTurn = !state.ruleset.replaceCenterOnDiscard;
       veil.push(discardedId);
 
       const updatedReading: ReadingRecord = {
@@ -1079,7 +1024,7 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
           source: 'DiscardCenter',
           reason: adviceFollowed ? 'followed-bad-advice' : 'discarded-despite-good-advice',
           visibility: 'public',
-          summary: `${activePlayer.name} chose to DISCARD Center → ${discardedCard.label} revealed in the Veil (advice was "${updatedReading.advice?.toUpperCase()}", ${updatedReading.adviceTruthful ? 'truthful' : 'deceptive'}).`,
+          summary: `${activePlayer.name} rejected Center → ${discardedCard.label} revealed in the Veil (advice was "${updatedReading.advice?.toUpperCase()}", ${updatedReading.adviceTruthful ? 'truthful' : 'deceptive'}).`,
           payload: {
             advice: updatedReading.advice,
             playerAction: 'discard',
@@ -1089,9 +1034,88 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
         })
       );
 
-      finalizeReadingReward(updatedReading, 'discarded', discardedCard);
+      finalizeReadingReward({
+        reading: updatedReading,
+        resolution: 'discarded',
+        sourceCard: discardedCard,
+        activePlayerId: activePlayer.id,
+        players,
+        readingHistory,
+        newEvents,
+        turn,
+        round,
+        phase,
+        ruleset: state.ruleset,
+        nextSeq
+      });
       currentReading = null;
-      phase = 'READY_TO_END_TURN';
+
+      // Stage R1 (RD-04 AGREED): Rejecting the read Center card draws & flips a fresh replacement card
+      // AND flips Left Event to determine Treasure / Barrier / Trial so the player never loses their turn!
+      if (state.ruleset.replaceCenterOnDiscard) {
+        let replacementId: string | null = null;
+        if (days.length > 0) {
+          const mctx = makeMajorBoardCtx();
+          const drawRep = drawNextMinorRoutingMajors(mctx, 'center', 'DiscardCenter-replacement');
+          syncFromMajorBoardCtx(mctx);
+          if (applyComboOutcomeIfAny(drawRep.outcome, 'DiscardCenter-replacement')) {
+            break;
+          }
+          replacementId = drawRep.minorCardId;
+        }
+
+        if (replacementId) {
+          const replacementCard = state.cards[replacementId]!;
+          boardCenter.push(replacementId);
+          centerRevealed = true;
+
+          newEvents.push(
+            makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
+              actor: activePlayer.id,
+              type: 'CardMoved',
+              affectedCardIds: [replacementId],
+              source: 'DiscardCenter',
+              reason: 'replacement-after-reject',
+              visibility: 'public',
+              summary: `${activePlayer.name} drew and flipped replacement Center card: ${replacementCard.label} (${replacementCard.vp} VP).`,
+              payload: { from: 'days', to: 'center', replacement: true }
+            })
+          );
+
+          if (state.ruleset.features.barriersAndTrials && boardEvent.length > 0) {
+            const eventId = boardEvent[0]!;
+            const eventCard = state.cards[eventId]!;
+            eventRevealed = true;
+            const reality = eventCardToReality(eventCard);
+            phase = 'AWAITING_EVENT_RESOLUTION';
+
+            newEvents.push(
+              makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
+                actor: 'system',
+                type: 'EventRevealed',
+                affectedCardIds: [eventId],
+                source: 'DiscardCenter',
+                reason: `left-event-${reality}`,
+                visibility: 'public',
+                summary: `Left Event revealed for replacement card: ${eventCard.label} (${eventCard.vp} VP) → ${reality.toUpperCase()}!`,
+                payload: {
+                  eventCardId: eventId,
+                  eventVP: eventCard.vp,
+                  eventElement: eventCard.element ?? null,
+                  reality
+                }
+              })
+            );
+          } else {
+            claimCenterAndEvolve('DiscardCenter-replacement');
+            phase = resolvePostEncounterPhase();
+          }
+        } else {
+          phase = resolvePostEncounterPhase();
+        }
+      } else {
+        phase = resolvePostEncounterPhase();
+      }
       break;
     }
 
@@ -1109,7 +1133,6 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
         });
       }
 
-      // Validate sacrificed card IDs belong uniquely to activePlayer's hand
       const seenSac = new Set<string>();
       for (const sacId of command.sacrificeCardIds) {
         if (seenSac.has(sacId)) {
@@ -1164,7 +1187,6 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
         });
       }
 
-      // Move sacrificed cards to Veil (provisional test preset)
       if (command.sacrificeCardIds.length > 0) {
         const sacSet = new Set(command.sacrificeCardIds);
         players[state.activePlayerIndex] = {
@@ -1229,21 +1251,28 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
         );
       }
 
-      // Claim Center & run mandatory chained evolution!
       claimCenterAndEvolve('ResolveEvent');
 
-      // Finalize Reading Reward (GOOD + PURSUE + CLAIM grants bonus!)
       if (currentReading) {
-        finalizeReadingReward(currentReading, 'claimed', centerCard);
+        finalizeReadingReward({
+          reading: currentReading,
+          resolution: 'claimed',
+          sourceCard: centerCard,
+          activePlayerId: activePlayer.id,
+          players,
+          readingHistory,
+          newEvents,
+          turn,
+          round,
+          phase,
+          ruleset: state.ruleset,
+          nextSeq
+        });
         currentReading = null;
       }
 
-      // Cleanup Left Event to Veil
       moveResolvedEventToVeil(`event-${breakdown.reality}-resolved`);
-
-      const postHand = players[state.activePlayerIndex]!.hand;
-      phase =
-        postHand.length > state.ruleset.maxHandSize ? 'AWAITING_HAND_DISCARD' : 'READY_TO_END_TURN';
+      phase = resolvePostEncounterPhase();
       break;
     }
 
@@ -1271,7 +1300,6 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
         });
       }
 
-      // Leave Center face-up for the next player!
       centerAbandoned = true;
       centerRevealed = true;
       abandonedByPlayerId = activePlayer.id;
@@ -1289,14 +1317,26 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
         })
       );
 
-      // Creator ruling: GOOD + PURSUE + ABANDON withholds Reader bonus unless readerBonusOnAbandon=true
       if (currentReading) {
-        finalizeReadingReward(currentReading, 'abandoned', centerCard);
+        finalizeReadingReward({
+          reading: currentReading,
+          resolution: 'abandoned',
+          sourceCard: centerCard,
+          activePlayerId: activePlayer.id,
+          players,
+          readingHistory,
+          newEvents,
+          turn,
+          round,
+          phase,
+          ruleset: state.ruleset,
+          nextSeq
+        });
         currentReading = null;
       }
 
       moveResolvedEventToVeil(`event-${reality}-abandoned`);
-      phase = 'READY_TO_END_TURN';
+      phase = resolvePostEncounterPhase();
       break;
     }
 
@@ -1326,9 +1366,7 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
         })
       );
       claimCenterAndEvolve('ClaimCenterCard');
-      const postHand = players[state.activePlayerIndex]!.hand;
-      phase =
-        postHand.length > state.ruleset.maxHandSize ? 'AWAITING_HAND_DISCARD' : 'READY_TO_END_TURN';
+      phase = resolvePostEncounterPhase();
       break;
     }
 
@@ -1359,10 +1397,7 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
           summary: `${activePlayer.name} sent ${discardedCard.label} from Center to the Veil.`
         })
       );
-      phase =
-        players[state.activePlayerIndex]!.hand.length > state.ruleset.maxHandSize
-          ? 'AWAITING_HAND_DISCARD'
-          : 'READY_TO_END_TURN';
+      phase = resolvePostEncounterPhase();
       break;
     }
 
@@ -1397,8 +1432,555 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
         })
       );
 
-      phase =
-        nextHand.length > state.ruleset.maxHandSize ? 'AWAITING_HAND_DISCARD' : 'READY_TO_END_TURN';
+      phase = resolvePostEncounterPhase();
+      break;
+    }
+
+    case 'AdvanceToReading': {
+      if (
+        state.phase !== 'AWAITING_ELEMENTAL_ACTION' ||
+        state.ruleset.elementalTiming !== 'before_reading'
+      ) {
+        return fail(state, command, {
+          code: 'INVALID_PHASE',
+          message: `AdvanceToReading is only valid during pre-reading AWAITING_ELEMENTAL_ACTION (current: ${state.phase}).`
+        });
+      }
+      enterReadingOrAbandonedPhase('AdvanceToReading');
+      break;
+    }
+
+    case 'UseElementalEffect': {
+      const prevEventId = boardEvent[0] ?? null;
+      const prevCenterId = boardCenter[0] ?? null;
+      const ctx = makeElementalContext();
+      const res = validateAndExecuteElementalEffect(ctx, command);
+      if (!res.ok) {
+        return fail(state, command, res.error);
+      }
+      syncFromElementalContext(ctx);
+      if (!runComboCheck('UseElementalEffect')) {
+        if (state.phase === 'AWAITING_EVENT_RESOLUTION') {
+          reconcilePostRevealedBoardMutation('UseElementalEffect', prevEventId, prevCenterId);
+        } else if (state.ruleset.elementalTiming === 'before_reading') {
+          const currentActive = players[state.activePlayerIndex]!;
+          const canContinuePrep = hasAnyLegalElementalAction({
+            player: currentActive,
+            cards: state.cards,
+            turn,
+            ruleset: state.ruleset,
+            daysCount: days.length,
+            veilCount: veil.length,
+            boardOccupiedCount: boardEvent.length + boardCenter.length + boardParallel.length
+          });
+          if (!canContinuePrep) {
+            enterReadingOrAbandonedPhase('UseElementalEffect');
+          }
+        } else {
+          phase = resolvePostEncounterPhase();
+        }
+      }
+      break;
+    }
+
+    case 'UseReaderBonus': {
+      const prevEventId = boardEvent[0] ?? null;
+      const prevCenterId = boardCenter[0] ?? null;
+      const ctx = makeElementalContext();
+      const res = validateAndExecuteReaderBonus(ctx, command);
+      if (!res.ok) {
+        return fail(state, command, res.error);
+      }
+      syncFromElementalContext(ctx);
+      if (!runComboCheck('UseReaderBonus')) {
+        if (state.phase === 'AWAITING_EVENT_RESOLUTION') {
+          reconcilePostRevealedBoardMutation('UseReaderBonus', prevEventId, prevCenterId);
+        } else if (state.phase === 'AWAITING_ELEMENTAL_ACTION') {
+          if (state.ruleset.elementalTiming === 'before_reading') {
+            const currentActive = players[state.activePlayerIndex]!;
+            const canContinuePrep = hasAnyLegalElementalAction({
+              player: currentActive,
+              cards: state.cards,
+              turn,
+              ruleset: state.ruleset,
+              daysCount: days.length,
+              veilCount: veil.length,
+              boardOccupiedCount: boardEvent.length + boardCenter.length + boardParallel.length
+            });
+            if (!canContinuePrep) {
+              enterReadingOrAbandonedPhase('UseReaderBonus');
+            }
+          } else {
+            phase = resolvePostEncounterPhase();
+          }
+        } else if (state.phase === 'AWAITING_READING_DECISION' && boardCenter.length === 0) {
+          // If the player burned/shuffled/repositioned the Center card mid-reading via Reader Bonus, refill or finish cleanly
+          currentReading = null;
+          enterReadingOrAbandonedPhase('UseReaderBonus');
+        } else if (state.phase === 'AWAITING_ABANDONED_CHOICE' && boardCenter.length === 0) {
+          enterReadingOrAbandonedPhase('UseReaderBonus');
+        }
+      }
+      break;
+    }
+
+    case 'StartEarthPeek': {
+      const isBonus = Boolean(command.bonusId);
+      if (isBonus) {
+        if (!canSpendReaderBonusInPhase(state.phase, state.ruleset)) {
+          return fail(state, command, {
+            code: 'INVALID_PHASE',
+            message: `Cannot use an Earth Reader Bonus during phase ${state.phase}.`
+          });
+        }
+      } else if (!canActivateHandElementalInPhase(state.phase, state.ruleset)) {
+        return fail(state, command, {
+          code: 'INVALID_PHASE',
+          message: state.ruleset.allowRevealedBoardElemental
+            ? `Earth hand card peek is only valid during Pre-Reading Prep or Revealed-Board Encounter (current: ${state.phase}).`
+            : `Earth hand card peek is only valid during AWAITING_ELEMENTAL_ACTION (current: ${state.phase}).`
+        });
+      }
+
+      // Validate source BEFORE checking target bounds or mutating anything!
+      let strength = 1;
+      let sourceCommand: 'UseElementalEffect' | 'UseReaderBonus' = 'UseElementalEffect';
+      let sourceCardId: string | null = null;
+      let bonusId: string | null = null;
+      let bonusIdx = -1;
+
+      if (isBonus && command.bonusId) {
+        if (state.ruleset.readerBonusPolicy === 'record_only') {
+          return fail(state, command, {
+            code: 'FEATURE_DISABLED',
+            message: 'Reader bonus spending is disabled in this ruleset.'
+          });
+        }
+        if (
+          state.ruleset.readerBonusConsumesTurnAction &&
+          !hasRemainingHandElementalAction(activePlayer, state.ruleset)
+        ) {
+          return fail(state, command, {
+            code: 'EFFECT_ALREADY_USED_THIS_TURN',
+            message: `${activePlayer.name} has already used their elemental action this turn.`
+          });
+        }
+        bonusIdx = activePlayer.pendingReaderBonuses.findIndex((b) => b.id === command.bonusId);
+        const bonus = bonusIdx >= 0 ? activePlayer.pendingReaderBonuses[bonusIdx] : undefined;
+        if (!bonus || bonus.status !== 'available' || bonus.earnedOnTurn >= turn) {
+          return fail(state, command, {
+            code: 'NO_AVAILABLE_READER_BONUS',
+            message: `Reader bonus "${command.bonusId}" is not available.`
+          });
+        }
+        if (bonus.sourceElement !== 'earth') {
+          return fail(state, command, {
+            code: 'ELEMENT_MISMATCH',
+            message: `Reader bonus "${bonus.id}" is ${bonus.sourceElement ?? 'none'}, not earth.`
+          });
+        }
+        sourceCommand = 'UseReaderBonus';
+        bonusId = bonus.id;
+        strength = 1;
+      } else if (command.sourceCardId) {
+        if (!hasRemainingHandElementalAction(activePlayer, state.ruleset)) {
+          return fail(state, command, {
+            code: 'EFFECT_ALREADY_USED_THIS_TURN',
+            message: `${activePlayer.name} has already used all elemental actions this turn.`
+          });
+        }
+        if (!activePlayer.hand.includes(command.sourceCardId)) {
+          return fail(state, command, {
+            code: 'CARD_NOT_IN_HAND',
+            message: `Card "${command.sourceCardId}" is not in ${activePlayer.id}'s hand.`
+          });
+        }
+        const sourceCard = state.cards[command.sourceCardId];
+        if (!sourceCard || sourceCard.element !== 'earth') {
+          return fail(state, command, {
+            code: 'ELEMENT_MISMATCH',
+            message: `Card "${command.sourceCardId}" is not an Earth card.`
+          });
+        }
+        const computed = computeElementalStrength(activePlayer, sourceCard, state.ruleset);
+        strength = computed.strength;
+        sourceCardId = sourceCard.id;
+      } else {
+        return fail(state, command, {
+          code: 'INVALID_CARD',
+          message: 'StartEarthPeek requires either sourceCardId or bonusId.'
+        });
+      }
+
+      // Validate requested Board slots + Immediate Future Days count BEFORE consuming source!
+      const requestedBoardSlots: BoardTargetSlot[] = [];
+      for (const slot of command.targetBoardSlots ?? []) {
+        if (slot !== 'event' && slot !== 'center' && slot !== 'parallel') {
+          return fail(state, command, {
+            code: 'INVALID_TARGET_SELECTION',
+            message: `Unsupported board slot "${String(slot)}".`
+          });
+        }
+        if (requestedBoardSlots.includes(slot)) {
+          return fail(state, command, {
+            code: 'INVALID_TARGET_SELECTION',
+            message: `Duplicate board slot "${slot}".`
+          });
+        }
+        const slotArr =
+          slot === 'event' ? boardEvent : slot === 'center' ? boardCenter : boardParallel;
+        if (slotArr.length === 0) {
+          return fail(state, command, {
+            code: 'INSUFFICIENT_TARGET_CARDS',
+            message: `Board slot "${slot}" is empty.`
+          });
+        }
+        requestedBoardSlots.push(slot);
+      }
+
+      const explicitDays = command.daysCount;
+      const effectiveDaysCount =
+        explicitDays !== undefined
+          ? explicitDays
+          : requestedBoardSlots.length > 0
+            ? 0
+            : Math.min(strength, days.length);
+
+      if (effectiveDaysCount < 0 || !Number.isInteger(effectiveDaysCount)) {
+        return fail(state, command, {
+          code: 'INVALID_TARGET_SELECTION',
+          message: `Invalid Earth daysCount "${effectiveDaysCount}".`
+        });
+      }
+      const totalSelected = requestedBoardSlots.length + effectiveDaysCount;
+      if (totalSelected === 0 || totalSelected > strength) {
+        return fail(state, command, {
+          code: 'INVALID_TARGET_SELECTION',
+          message: `Earth strength is ${strength}, but ${totalSelected} target(s) were selected.`
+        });
+      }
+      if (days.length < effectiveDaysCount) {
+        return fail(state, command, {
+          code: 'INSUFFICIENT_TARGET_CARDS',
+          message: `Deck of Days only has ${days.length} card(s), fewer than requested ${effectiveDaysCount}.`
+        });
+      }
+      if (requestedBoardSlots.length === 0 && days.length < 2) {
+        return fail(state, command, {
+          code: 'INSUFFICIENT_TARGET_CARDS',
+          message: 'Deck of Days needs at least 2 cards to inspect and reorder the Immediate Future.'
+        });
+      }
+      if (requestedBoardSlots.length > 0 && totalSelected < 2) {
+        return fail(state, command, {
+          code: 'INVALID_TARGET_SELECTION',
+          message: 'Reordering Board slots requires at least 2 targeted cards across Board and/or Deck of Days.'
+        });
+      }
+
+      // ---- Atomic consumption BEFORE revealing cards (cheat-proof!) ----
+      const limit = state.ruleset.maxElementalActionsPerTurn ?? 1;
+      if (isBonus && bonusId && bonusIdx >= 0) {
+        const bonus = activePlayer.pendingReaderBonuses[bonusIdx]!;
+        const updatedBonuses = activePlayer.pendingReaderBonuses.map((b, idx) =>
+          idx === bonusIdx ? { ...b, status: 'consumed' as const, consumedOnTurn: turn } : b
+        );
+        const nextUsed = state.ruleset.readerBonusConsumesTurnAction
+          ? getElementalActionsUsedCount(activePlayer) + 1
+          : getElementalActionsUsedCount(activePlayer);
+        const exhausted = state.ruleset.readerBonusConsumesTurnAction
+          ? limit !== 'unlimited' && nextUsed >= limit
+          : activePlayer.effectUsedThisTurn;
+        players[state.activePlayerIndex] = {
+          ...activePlayer,
+          pendingReaderBonuses: updatedBonuses,
+          elementalActionsUsedThisTurn: nextUsed,
+          effectUsedThisTurn: exhausted
+        };
+        newEvents.push(
+          makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
+            actor: activePlayer.id,
+            type: 'ReaderBonusConsumed',
+            affectedCardIds: [bonus.sourceCardId],
+            source: 'StartEarthPeek',
+            reason: state.ruleset.readerBonusPolicy,
+            visibility: 'public',
+            summary: `${activePlayer.name} spent Earth Reader Bonus (Tier 1 · 0 hand cost) to inspect the Immediate Future.`,
+            payload: { bonusId: bonus.id, element: 'earth', strength: 1 }
+          })
+        );
+      } else if (sourceCardId) {
+        const sourceCard = state.cards[sourceCardId]!;
+        const nextUsed = getElementalActionsUsedCount(activePlayer) + 1;
+        const exhausted = limit !== 'unlimited' && nextUsed >= limit;
+        players[state.activePlayerIndex] = {
+          ...activePlayer,
+          hand: activePlayer.hand.filter((id) => id !== sourceCard.id),
+          elementalActionsUsedThisTurn: nextUsed,
+          effectUsedThisTurn: exhausted
+        };
+        veil.push(sourceCard.id);
+        newEvents.push(
+          makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
+            actor: activePlayer.id,
+            type: 'ElementalEffectActivated',
+            affectedCardIds: [sourceCard.id],
+            source: 'StartEarthPeek',
+            reason: 'activate-earth-peek',
+            visibility: 'public',
+            summary: `${activePlayer.name} activated Earth (♦) using ${sourceCard.label} (strength ${strength}) to inspect and reorder.`,
+            payload: {
+              element: 'earth',
+              sourceCardId: sourceCard.id,
+              strength,
+              boardSlots: requestedBoardSlots,
+              daysCount: effectiveDaysCount
+            }
+          })
+        );
+        newEvents.push(
+          makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
+            actor: activePlayer.id,
+            type: 'CardMoved',
+            affectedCardIds: [sourceCard.id],
+            source: 'StartEarthPeek',
+            reason: 'elemental-activation-cost',
+            visibility: 'public',
+            summary: `${sourceCard.label} consumed from ${activePlayer.name}'s hand into the Veil.`,
+            payload: { from: 'hand', to: 'veil' }
+          })
+        );
+      }
+
+      const boardPeekIds = requestedBoardSlots.map((slot) =>
+        slot === 'event' ? boardEvent[0]! : slot === 'center' ? boardCenter[0]! : boardParallel[0]!
+      );
+      const daysPeekIds = days.slice(0, effectiveDaysCount);
+      const peekedCardIds = [...boardPeekIds, ...daysPeekIds];
+
+      pendingEarthReorder = {
+        playerId: activePlayer.id,
+        sourceCommand,
+        sourceCardId,
+        bonusId,
+        strength,
+        boardSlots: requestedBoardSlots,
+        daysCount: effectiveDaysCount,
+        peekedCardIds,
+        returnPhase: state.phase
+      };
+      phase = 'AWAITING_EARTH_REORDER';
+
+      const scopeDesc =
+        requestedBoardSlots.length > 0 && effectiveDaysCount > 0
+          ? `${requestedBoardSlots.length} Board slot(s) + top ${effectiveDaysCount} of the Immediate Future`
+          : requestedBoardSlots.length > 0
+            ? `${requestedBoardSlots.length} Board slot(s)`
+            : `top ${effectiveDaysCount} card${effectiveDaysCount === 1 ? '' : 's'} of the Immediate Future`;
+
+      newEvents.push(
+        makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
+          actor: activePlayer.id,
+          type: 'EarthPeekStarted',
+          affectedCardIds: [],
+          source: 'StartEarthPeek',
+          reason: 'earth-private-peek',
+          visibility: 'public',
+          summary: `${activePlayer.name} privately inspected ${scopeDesc}.`,
+          payload: { boardSlots: requestedBoardSlots, daysCount: effectiveDaysCount, strength }
+        })
+      );
+      newEvents.push(
+        makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
+          actor: activePlayer.id,
+          type: 'EarthPeekStarted',
+          affectedCardIds: peekedCardIds,
+          source: 'StartEarthPeek',
+          reason: 'earth-private-peek-admin',
+          visibility: 'admin_only',
+          summary: `[Admin] ${activePlayer.name} peeked at ${scopeDesc}: ${peekedCardIds.map((id) => state.cards[id]!.label).join(', ')}.`,
+          payload: { peekedCardIds, boardSlots: requestedBoardSlots, daysCount: effectiveDaysCount }
+        })
+      );
+      break;
+    }
+
+    case 'CommitEarthReorder': {
+      if (state.phase !== 'AWAITING_EARTH_REORDER' || !pendingEarthReorder) {
+        return fail(state, command, {
+          code: 'INVALID_PHASE',
+          message: 'No active Earth reorder session to commit.'
+        });
+      }
+      if (pendingEarthReorder.playerId !== command.playerId) {
+        return fail(state, command, {
+          code: 'NOT_ACTIVE_PLAYER',
+          message: `Only ${pendingEarthReorder.playerId} can commit this Earth reorder.`
+        });
+      }
+
+      const {
+        boardSlots,
+        daysCount,
+        peekedCardIds,
+        strength,
+        sourceCommand,
+        sourceCardId,
+        bonusId,
+        returnPhase
+      } = pendingEarthReorder;
+
+      const prevEventId = boardEvent[0] ?? null;
+      const prevCenterId = boardCenter[0] ?? null;
+
+      if (command.moveTopToBottom && boardSlots.length === 0) {
+        const moved = days.shift()!;
+        days.push(moved);
+        newEvents.push(
+          makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
+            actor: activePlayer.id,
+            type: 'CardMoved',
+            affectedCardIds: [],
+            source: 'CommitEarthReorder',
+            reason: 'earth-reposition-days-to-bottom',
+            visibility: 'public',
+            summary: `${activePlayer.name} deliberately moved the Next Upcoming card of Deck of Days to the bottom.`,
+            payload: { from: 'days', to: 'days', placement: 'bottom', count: 1 }
+          })
+        );
+        newEvents.push(
+          makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
+            actor: activePlayer.id,
+            type: 'ElementalEffectResolved',
+            affectedCardIds: [],
+            source: sourceCommand,
+            reason: 'earth-days_to_bottom',
+            visibility: 'public',
+            summary: `${activePlayer.name} resolved Earth (Reorder · strength ${strength}, moved Next Upcoming → bottom).`,
+            payload: { element: 'earth', strength, mode: 'days_to_bottom', sourceCardId, bonusId }
+          })
+        );
+      } else {
+        const newOrder = command.newOrder ?? peekedCardIds;
+        if (
+          newOrder.length !== peekedCardIds.length ||
+          new Set(newOrder).size !== peekedCardIds.length ||
+          !peekedCardIds.every((id) => newOrder.includes(id))
+        ) {
+          return fail(state, command, {
+            code: 'INVALID_REORDER_SPEC',
+            message: 'Earth newOrder must be an exact permutation of the inspected cards.'
+          });
+        }
+
+        const newBoardIds = newOrder.slice(0, boardSlots.length);
+        const newDaysTop = newOrder.slice(boardSlots.length);
+
+        const keepBoardRevealed = returnPhase === 'AWAITING_EVENT_RESOLUTION';
+        boardSlots.forEach((slot, idx) => {
+          const placedId = newBoardIds[idx]!;
+          const placedMajor = isMajorCard(state.cards[placedId]);
+          if (slot === 'event') {
+            boardEvent = [placedId];
+            eventRevealed = keepBoardRevealed || placedMajor;
+          } else if (slot === 'parallel') {
+            boardParallel = [placedId];
+          } else {
+            boardCenter = [placedId];
+            centerRevealed = keepBoardRevealed || placedMajor;
+            centerAbandoned = false;
+            abandonedByPlayerId = null;
+          }
+        });
+        // Keep majorPending strictly synced to cards still physically on the Board
+        majorPending = majorPending.filter(
+          (m) =>
+            boardParallel.includes(m.cardId) ||
+            boardEvent.includes(m.cardId) ||
+            boardCenter.includes(m.cardId)
+        );
+        if (daysCount > 0) {
+          days = [...newDaysTop, ...days.slice(daysCount)];
+        }
+
+        const modeLabel =
+          boardSlots.length > 0 && daysCount > 0
+            ? 'board_and_days_reorder'
+            : boardSlots.length > 0
+              ? 'board_reorder'
+              : 'days_reorder';
+
+        newEvents.push(
+          makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
+            actor: activePlayer.id,
+            type: 'CardMoved',
+            affectedCardIds: [],
+            source: 'CommitEarthReorder',
+            reason: `earth-${modeLabel}`,
+            visibility: 'public',
+            summary:
+              boardSlots.length > 0 && daysCount > 0
+                ? `${activePlayer.name} deliberately reordered ${boardSlots.length} Board slot(s) and top ${daysCount} card(s) of the Immediate Future.`
+                : boardSlots.length > 0
+                  ? `${activePlayer.name} deliberately reordered Board slots (${boardSlots.join(' ↔ ')}).`
+                  : `${activePlayer.name} deliberately arranged the top ${daysCount} card${daysCount === 1 ? '' : 's'} of the Immediate Future.`,
+            payload: { boardSlots, daysCount }
+          })
+        );
+        newEvents.push(
+          makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
+            actor: activePlayer.id,
+            type: 'CardMoved',
+            affectedCardIds: newOrder,
+            source: 'CommitEarthReorder',
+            reason: `earth-${modeLabel}-admin`,
+            visibility: 'admin_only',
+            summary: `[Admin] Earth arranged ${modeLabel}: ${newOrder.map((id) => state.cards[id]!.label).join(' → ')}.`,
+            payload: { newOrder, boardSlots, daysCount }
+          })
+        );
+        newEvents.push(
+          makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
+            actor: activePlayer.id,
+            type: 'ElementalEffectResolved',
+            affectedCardIds: [],
+            source: sourceCommand,
+            reason: `earth-${modeLabel}`,
+            visibility: 'public',
+            summary: `${activePlayer.name} resolved Earth (Reorder · strength ${strength}, ${modeLabel}).`,
+            payload: { element: 'earth', strength, mode: modeLabel, sourceCardId, bonusId }
+          })
+        );
+      }
+
+      pendingEarthReorder = null;
+      if (!runComboCheck('CommitEarthReorder')) {
+        if (returnPhase === 'AWAITING_EVENT_RESOLUTION') {
+          reconcilePostRevealedBoardMutation('CommitEarthReorder', prevEventId, prevCenterId);
+        } else if (returnPhase === 'AWAITING_ELEMENTAL_ACTION') {
+          if (state.ruleset.elementalTiming === 'before_reading') {
+            const currentActive = players[state.activePlayerIndex]!;
+            const canContinuePrep = hasAnyLegalElementalAction({
+              player: currentActive,
+              cards: state.cards,
+              turn,
+              ruleset: state.ruleset,
+              daysCount: days.length,
+              veilCount: veil.length,
+              boardOccupiedCount: boardEvent.length + boardCenter.length + boardParallel.length
+            });
+            if (!canContinuePrep) {
+              enterReadingOrAbandonedPhase('CommitEarthReorder');
+            } else {
+              phase = 'AWAITING_ELEMENTAL_ACTION';
+            }
+          } else {
+            phase = resolvePostEncounterPhase();
+          }
+        } else {
+          phase = returnPhase;
+        }
+      }
       break;
     }
 
@@ -1409,8 +1991,12 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
           message: `Hand size (${activePlayer.hand.length}) exceeds maxHandSize (${state.ruleset.maxHandSize}); discard first.`
         });
       }
+      const canEndFromElemental =
+        state.phase === 'AWAITING_ELEMENTAL_ACTION' &&
+        state.ruleset.elementalTiming === 'after_encounter';
       if (
         state.phase !== 'READY_TO_END_TURN' &&
+        !canEndFromElemental &&
         !(state.phase === 'AWAITING_CENTER_DECISION' && boardCenter.length === 0)
       ) {
         return fail(state, command, {
@@ -1419,11 +2005,37 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
         });
       }
 
+      // Expire any unused Reader bonuses earned prior to this turn
+      const afterExpiry = expireUnusedReaderBonuses({
+        player: players[state.activePlayerIndex]!,
+        currentTurn: turn,
+        round,
+        phase,
+        ruleset: state.ruleset,
+        newEvents,
+        nextSeq
+      });
+
       players[state.activePlayerIndex] = {
-        ...activePlayer,
-        turnsTaken: activePlayer.turnsTaken + 1,
-        effectUsedThisTurn: false
+        ...afterExpiry,
+        turnsTaken: afterExpiry.turnsTaken + 1,
+        effectUsedThisTurn: false,
+        elementalActionsUsedThisTurn: 0
       };
+
+      // D0 Finding D: Optional provisional rotation of unused Left Event when Center was discarded
+      if (
+        state.ruleset.rotateEventOnCenterDiscard &&
+        discardedCenterThisTurn &&
+        boardEvent.length > 0 &&
+        !eventRevealed
+      ) {
+        moveResolvedEventToVeil(
+          'rotate-unused-event-on-center-discard',
+          'Unused Left Event rotated to Veil after Center discard'
+        );
+      }
+      discardedCenterThisTurn = false;
 
       newEvents.push(
         makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
@@ -1461,89 +2073,154 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
         }
         activePlayerId = players[activePlayerIndex]!.id;
 
-        // Refill Left Event if empty & barriersAndTrials enabled (never double-draw if unrevealed Event persisted!)
-        if (
-          state.ruleset.features.barriersAndTrials &&
-          boardEvent.length === 0 &&
-          days.length > 0 &&
-          state.ruleset.boardOccupancyLimits.event >= 1
-        ) {
-          const nextEventId = days.shift()!;
-          const nextEventCard = state.cards[nextEventId]!;
-          boardEvent.push(nextEventId);
-          eventRevealed = false;
-          newEvents.push(
-            makeEvent(nextSeq(), turn, round, 'AWAITING_READING', state.ruleset.version, {
-              actor: 'system',
-              type: 'CardMoved',
-              affectedCardIds: [],
-              source: 'turn-refill',
-              reason: 'populate-event-concealed',
-              visibility: 'public',
-              summary: `Turn ${turn} Event card placed face-down in Left slot (${nextEventCard.backGroup} back).`,
-              payload: { from: 'days', to: 'event', concealed: true }
-            })
-          );
-          newEvents.push(
-            makeEvent(nextSeq(), turn, round, 'AWAITING_READING', state.ruleset.version, {
-              actor: 'system',
-              type: 'CardMoved',
-              affectedCardIds: [nextEventId],
-              source: 'turn-refill',
-              reason: 'populate-event-admin-detail',
-              visibility: 'admin_only',
-              summary: `[Admin] Turn ${turn} concealed Left Event is ${nextEventCard.label} (${eventCardToReality(nextEventCard)}, ${nextEventCard.vp} VP).`,
-              payload: { from: 'days', to: 'event', cardId: nextEventId }
-            })
-          );
+        // Awaken any dormant Major Arcana whose dormancy expires on this turn
+        if (state.ruleset.features.majors && majorPending.length > 0) {
+          const mctx = makeMajorBoardCtx();
+          activateReadyDormantMajors(mctx);
+          syncFromMajorBoardCtx(mctx);
         }
 
-        // Check if an abandoned Center card persisted from previous turn
-        if (centerAbandoned && boardCenter.length > 0) {
-          phase = 'AWAITING_ABANDONED_CHOICE';
-          currentReading = null;
-        } else if (boardCenter.length === 0 && days.length > 0) {
-          if (state.ruleset.features.readings) {
-            dealFreshConcealedCenterForReading('turn-refill');
-          } else {
-            const nextCenterId = days.shift()!;
-            boardCenter.push(nextCenterId);
-            centerRevealed = true;
-            currentReading = null;
-            phase = 'AWAITING_CENTER_DECISION';
+        const endedByEventDraw = populateEventSlotFromDays('turn-refill');
+        const preReadingElementalRequested =
+          state.ruleset.features.elementalEffects &&
+          state.ruleset.elementalTiming === 'before_reading';
+
+        const computeNextTurnPreElemental = (): boolean =>
+          preReadingElementalRequested &&
+          hasAnyLegalElementalAction({
+            player: players[activePlayerIndex]!,
+            cards: state.cards,
+            turn,
+            ruleset: state.ruleset,
+            daysCount: days.length,
+            veilCount: veil.length,
+            boardOccupiedCount:
+              boardEvent.length + boardCenter.length + boardParallel.length + 1
+          });
+
+        if (!endedByEventDraw) {
+          if (centerAbandoned && boardCenter.length > 0) {
+            // Ensure all 3 Board positions are set FIRST before player decision!
+            if (!populateParallelSlotFromDays('turn-refill')) {
+              if (state.ruleset.abandonedClaimPolicy === 'free_no_prep') {
+                // R1.1 AB-1: Abandoned choice runs BEFORE Elemental Prep; claiming skips both Reading & Prep, declining starts a normal turn.
+                phase = 'AWAITING_ABANDONED_CHOICE';
+                currentReading = null;
+              } else {
+                const canPrep =
+                  preReadingElementalRequested &&
+                  hasAnyLegalElementalAction({
+                    player: players[activePlayerIndex]!,
+                    cards: state.cards,
+                    turn,
+                    ruleset: state.ruleset,
+                    daysCount: days.length,
+                    veilCount: veil.length,
+                    boardOccupiedCount:
+                      boardEvent.length + boardCenter.length + boardParallel.length
+                  });
+                phase = canPrep ? 'AWAITING_ELEMENTAL_ACTION' : 'AWAITING_ABANDONED_CHOICE';
+                currentReading = null;
+              }
+            }
+          } else if (boardCenter.length === 0 && !state.ruleset.emptyChamberMode && boardParallel.length > 0 && !isMajorCard(state.cards[boardParallel[0]!])) {
+            // Stage R1 (RD-15): Slide concealed Minor from Right chamber -> Center, then refill Right from Days!
+            const slidId = boardParallel.shift()!;
+            const slidCard = state.cards[slidId]!;
+            boardCenter.push(slidId);
+            centerRevealed = !state.ruleset.features.readings;
+            const reader = players[(activePlayerIndex + 1) % players.length]!;
+            const canPrep = computeNextTurnPreElemental();
+            if (!state.ruleset.features.readings) {
+              currentReading = null;
+              phase = 'AWAITING_CENTER_DECISION';
+            } else if (canPrep) {
+              currentReading = null;
+              phase = 'AWAITING_ELEMENTAL_ACTION';
+            } else {
+              currentReading = createReadingForTurn(
+                players,
+                activePlayerIndex,
+                slidCard,
+                turn,
+                round,
+                state.ruleset
+              );
+              phase = 'AWAITING_READING';
+            }
             newEvents.push(
               makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
                 actor: 'system',
                 type: 'CardMoved',
-                affectedCardIds: [nextCenterId],
+                affectedCardIds: [],
                 source: 'turn-refill',
-                reason: 'populate-center',
+                reason: 'slide-parallel-to-center',
                 visibility: 'public',
-                summary: `Turn ${turn} Center revealed: ${state.cards[nextCenterId]!.label}.`,
-                payload: { from: 'days', to: 'center' }
+                summary: canPrep
+                  ? `Turn ${turn}: Right chamber card slid into Center (${slidCard.backGroup} back). Optional Elemental Prep open before Reading.`
+                  : `Turn ${turn}: Right chamber card slid into Center (${slidCard.backGroup} back). Waiting for ${reader.name}'s reading.`,
+                payload: { from: 'parallel', to: 'center', concealed: !centerRevealed }
               })
             );
-          }
-        } else {
-          // Days ran out and no Center card left -> game ends now!
-          const postOutcome = evaluateCompletion(players, days, boardCenter, state.ruleset);
-          if (postOutcome) {
-            phase = 'GAME_OVER';
-            currentReading = null;
             newEvents.push(
               makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
                 actor: 'system',
-                type: 'GameCompleted',
-                affectedCardIds: [],
-                source: 'EndTurn',
-                reason: postOutcome.reason,
-                visibility: 'public',
-                summary: postOutcome.summary,
-                payload: { ...postOutcome }
+                type: 'CardMoved',
+                affectedCardIds: [slidId],
+                source: 'turn-refill',
+                reason: 'slide-parallel-to-center-admin',
+                visibility: 'admin_only',
+                summary: `[Admin] Turn ${turn} slid ${slidCard.label} from Right chamber to Center.`,
+                payload: { from: 'parallel', to: 'center', cardId: slidId }
               })
             );
+            populateParallelSlotFromDays('turn-refill');
+          } else if (boardCenter.length === 0 && days.length > 0) {
+            if (state.ruleset.features.readings) {
+              const canPrep = computeNextTurnPreElemental();
+              if (!dealFreshConcealedCenterForReading('turn-refill', canPrep)) {
+                populateParallelSlotFromDays('turn-refill');
+              }
+            } else {
+              const nextCenterId = days.shift()!;
+              boardCenter.push(nextCenterId);
+              centerRevealed = true;
+              currentReading = null;
+              phase = 'AWAITING_CENTER_DECISION';
+              newEvents.push(
+                makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
+                  actor: 'system',
+                  type: 'CardMoved',
+                  affectedCardIds: [nextCenterId],
+                  source: 'turn-refill',
+                  reason: 'populate-center',
+                  visibility: 'public',
+                  summary: `Turn ${turn} Center revealed: ${state.cards[nextCenterId]!.label}.`,
+                  payload: { from: 'days', to: 'center' }
+                })
+              );
+              populateParallelSlotFromDays('turn-refill');
+            }
           } else {
-            phase = 'READY_TO_END_TURN';
+            const postOutcome = evaluateCompletion(players, days, boardCenter, state.ruleset);
+            if (postOutcome) {
+              phase = 'GAME_OVER';
+              currentReading = null;
+              newEvents.push(
+                makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
+                  actor: 'system',
+                  type: 'GameCompleted',
+                  affectedCardIds: [],
+                  source: 'EndTurn',
+                  reason: postOutcome.reason,
+                  visibility: 'public',
+                  summary: postOutcome.summary,
+                  payload: { ...postOutcome }
+                })
+              );
+            } else {
+              phase = 'READY_TO_END_TURN';
+            }
           }
         }
 
@@ -1572,7 +2249,7 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
     }
   }
 
-  let outcome: GameOutcome | undefined = state.outcome;
+  let outcome: GameOutcome | undefined = comboOutcome ?? state.outcome;
   if (phase !== 'GAME_OVER') {
     const midOutcome = evaluateCompletion(players, days, boardCenter, state.ruleset);
     if (midOutcome && midOutcome.reason === 'target_rank_reached') {
@@ -1593,12 +2270,13 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
       );
     }
   } else {
-    outcome = evaluateCompletion(players, days, boardCenter, state.ruleset);
+    outcome = comboOutcome ?? evaluateCompletion(players, days, boardCenter, state.ruleset);
   }
 
   const allEvents = [...state.events, ...newEvents];
   const draftState: Omit<GameState, 'stateHash'> = {
     ...state,
+    rngState,
     phase,
     round,
     turn,
@@ -1615,8 +2293,11 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
     centerRevealed,
     centerAbandoned,
     abandonedByPlayerId,
+    discardedCenterThisTurn,
     currentReading,
     readingHistory,
+    pendingEarthReorder,
+    majorPending,
     players,
     status: outcome ? 'completed' : 'playing',
     outcome,

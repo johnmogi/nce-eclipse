@@ -12,7 +12,8 @@ export interface InvariantReport {
  * 2. Board slot occupancy limits enforced per ruleset.
  * 3. Every player's lineage stack is non-empty, strictly ascending, and matches top card.
  * 4. Active player index/ID consistency.
- * 5. State hash integrity.
+ * 5. Phase-specific invariants (readings, abandonment, event resolution, elemental window).
+ * 6. State hash integrity.
  */
 export function checkInvariants(state: GameState): InvariantReport {
   const violations: string[] = [];
@@ -37,7 +38,16 @@ export function checkInvariants(state: GameState): InvariantReport {
   for (const id of state.board.event) track(id, 'board.event');
   for (const id of state.board.center) track(id, 'board.center');
   for (const id of state.board.parallel) track(id, 'board.parallel');
-  for (const pending of state.majorPending) track(pending.cardId, 'majorPending');
+  // majorPending tracks dormancy metadata for Majors currently on the Board (not a separate physical zone)
+  for (const pending of state.majorPending) {
+    const onBoard =
+      state.board.parallel.includes(pending.cardId) ||
+      state.board.event.includes(pending.cardId) ||
+      state.board.center.includes(pending.cardId);
+    if (!onBoard) {
+      violations.push(`Dormant majorPending "${pending.cardId}" is not currently on the Board`);
+    }
+  }
 
   for (const player of state.players) {
     for (const id of player.hand) track(id, `player(${player.id}).hand`);
@@ -128,6 +138,48 @@ export function checkInvariants(state: GameState): InvariantReport {
     }
     if (state.board.event.length > 0 && !state.eventRevealed) {
       violations.push('AWAITING_EVENT_RESOLUTION requires Left Event card to be revealed');
+    }
+  }
+
+  if (state.phase === 'AWAITING_ELEMENTAL_ACTION') {
+    if (!state.ruleset.features.elementalEffects) {
+      violations.push('AWAITING_ELEMENTAL_ACTION is invalid when features.elementalEffects is false');
+    }
+    if (activePlayer && activePlayer.hand.length > state.ruleset.maxHandSize) {
+      violations.push('Cannot enter AWAITING_ELEMENTAL_ACTION while hand exceeds maxHandSize');
+    }
+  }
+
+  if (state.phase === 'AWAITING_EARTH_REORDER') {
+    const pending = state.pendingEarthReorder;
+    if (!pending || pending.peekedCardIds.length === 0) {
+      violations.push('AWAITING_EARTH_REORDER requires active pendingEarthReorder with peekedCardIds');
+    } else {
+      const expectedIds: string[] = [];
+      for (const slot of pending.boardSlots) {
+        const slotArr =
+          slot === 'event'
+            ? state.board.event
+            : slot === 'center'
+              ? state.board.center
+              : state.board.parallel;
+        if (slotArr.length === 0) {
+          violations.push(`pendingEarthReorder references empty board slot "${slot}"`);
+        } else {
+          expectedIds.push(slotArr[0]!);
+        }
+      }
+      if (state.days.length < pending.daysCount) {
+        violations.push('pendingEarthReorder daysCount exceeds remaining Deck of Days cards');
+      } else {
+        expectedIds.push(...state.days.slice(0, pending.daysCount));
+      }
+      if (
+        expectedIds.length !== pending.peekedCardIds.length ||
+        expectedIds.some((id, idx) => id !== pending.peekedCardIds[idx])
+      ) {
+        violations.push('pendingEarthReorder cards do not match targeted Board/Days slots');
+      }
     }
   }
 

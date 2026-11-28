@@ -1,3 +1,11 @@
+import {
+  canActivateHandElementalInPhase,
+  canSpendReaderBonusInPhase,
+  getAvailableReaderBonusesForTurn,
+  getElementalActionsUsedCount,
+  hasRemainingHandElementalAction
+} from './elemental-effects.js';
+import { isMajorCard } from './majors.js';
 import { eventCardToReality } from './reconciliation.js';
 import type {
   Card,
@@ -7,10 +15,14 @@ import type {
   GameEvent,
   GameState,
   ProjectedBoardSlotItem,
+  ProjectedEarthReorderView,
   ProjectedGameView,
+  ProjectedOrderedZoneItem,
   ProjectedPlayerView,
   ProjectedReadingView,
-  Viewer
+  Viewer,
+  ZoneAccessState,
+  ZoneVisibilityState
 } from './types.js';
 
 function mapCardIds(ids: readonly string[], cards: Readonly<Record<string, Card>>): Card[] {
@@ -36,29 +48,105 @@ export function getLegalActionsForState(state: GameState, viewer: Viewer): Comma
     return [];
   }
 
+  const activePlayer = state.players[state.activePlayerIndex];
+
+  const appendAnytimeReaderBonus = (actions: Command['type'][]): Command['type'][] => {
+    if (
+      activePlayer &&
+      state.ruleset.features.elementalEffects &&
+      canSpendReaderBonusInPhase(state.phase, state.ruleset)
+    ) {
+      const availBonuses = getAvailableReaderBonusesForTurn(activePlayer, state.turn, state.ruleset);
+      const canUseBonus =
+        availBonuses.length > 0 &&
+        (!state.ruleset.readerBonusConsumesTurnAction || !activePlayer.effectUsedThisTurn);
+      if (canUseBonus && !actions.includes('UseReaderBonus')) {
+        actions.push('UseReaderBonus');
+      }
+      if (
+        canUseBonus &&
+        availBonuses.some((b) => b.sourceElement === 'earth') &&
+        state.days.length >= 2 &&
+        !actions.includes('StartEarthPeek')
+      ) {
+        actions.push('StartEarthPeek');
+      }
+    }
+    return actions;
+  };
+
   switch (state.phase) {
     case 'AWAITING_ABANDONED_CHOICE':
-      return ['ClaimAbandonedCard', 'DeclineAbandonedCard'];
+      return appendAnytimeReaderBonus(['ClaimAbandonedCard', 'DeclineAbandonedCard']);
     case 'AWAITING_READING_DECISION':
-      return ['PursueCenter', 'DiscardCenter'];
+      return appendAnytimeReaderBonus(['PursueCenter', 'DiscardCenter']);
     case 'AWAITING_EVENT_RESOLUTION': {
       const eventId = state.board.event[0];
       const eventCard = eventId ? state.cards[eventId] : undefined;
       const reality = eventCard ? eventCardToReality(eventCard) : 'treasure';
-      return reality === 'treasure' ? ['ResolveEvent'] : ['ResolveEvent', 'AbandonCenter'];
+      const actions: Command['type'][] =
+        reality === 'treasure' ? ['ResolveEvent'] : ['ResolveEvent', 'AbandonCenter'];
+      if (
+        activePlayer &&
+        state.ruleset.features.elementalEffects &&
+        canActivateHandElementalInPhase(state.phase, state.ruleset)
+      ) {
+        const boardOccupied =
+          state.board.event.length + state.board.center.length + state.board.parallel.length;
+        if (
+          hasRemainingHandElementalAction(activePlayer, state.ruleset) &&
+          activePlayer.hand.length > 0
+        ) {
+          actions.push('UseElementalEffect');
+          if (
+            (state.days.length >= 2 ||
+              boardOccupied >= 2 ||
+              (boardOccupied >= 1 && state.days.length >= 1)) &&
+            activePlayer.hand.some((id) => state.cards[id]?.element === 'earth')
+          ) {
+            actions.push('StartEarthPeek');
+          }
+        }
+      }
+      return appendAnytimeReaderBonus(actions);
     }
     case 'AWAITING_CENTER_DECISION':
       return state.board.center.length > 0 ? ['ClaimCenterCard', 'DiscardCenterCard'] : ['EndTurn'];
     case 'AWAITING_HAND_DISCARD':
       return ['DiscardHandCard'];
+    case 'AWAITING_EARTH_REORDER':
+      return ['CommitEarthReorder'];
+    case 'AWAITING_ELEMENTAL_ACTION': {
+      const actions: Command['type'][] = [];
+      if (activePlayer && state.ruleset.features.elementalEffects) {
+        const boardOccupied =
+          state.board.event.length + state.board.center.length + state.board.parallel.length;
+        if (hasRemainingHandElementalAction(activePlayer, state.ruleset) && activePlayer.hand.length > 0) {
+          actions.push('UseElementalEffect');
+          if (
+            (state.days.length >= 2 || boardOccupied >= 2 || (boardOccupied >= 1 && state.days.length >= 1)) &&
+            activePlayer.hand.some((id) => state.cards[id]?.element === 'earth')
+          ) {
+            actions.push('StartEarthPeek');
+          }
+        }
+        appendAnytimeReaderBonus(actions);
+      }
+      if (state.ruleset.elementalTiming === 'before_reading') {
+        actions.push('AdvanceToReading');
+      } else {
+        actions.push('EndTurn');
+      }
+      return actions;
+    }
     case 'READY_TO_END_TURN':
-      return ['EndTurn'];
+      return appendAnytimeReaderBonus(['EndTurn']);
     case 'GAME_OVER':
       return [];
   }
 }
 
-function projectEvents(events: readonly GameEvent[], viewer: Viewer): GameEvent[] {
+function projectEvents(events: readonly GameEvent[], viewer: Viewer, rulesetName: string): GameEvent[] {
   if (viewer.role === 'admin') {
     return [...events];
   }
@@ -66,6 +154,18 @@ function projectEvents(events: readonly GameEvent[], viewer: Viewer): GameEvent[
   const out: GameEvent[] = [];
   for (const ev of events) {
     if (ev.visibility === 'admin_only') continue;
+    if (ev.type === 'GameCreated') {
+      // D0 Finding E: Strip deterministic seed from player event logs
+      out.push({
+        ...ev,
+        summary: `Started ${rulesetName} (v${ev.rulesetVersion}).`,
+        payload: {
+          rulesetId: ev.payload?.rulesetId ?? null,
+          rulesetVersion: ev.rulesetVersion
+        }
+      });
+      continue;
+    }
     if (ev.visibility === 'private_to_actor' && ev.actor !== viewer.playerId) {
       out.push({
         ...ev,
@@ -89,7 +189,14 @@ function buildDeckComponents(
   const locationById = new Map<string, string>();
 
   state.veil.forEach((id) => locationById.set(id, 'Veil (Public Discard)'));
-  state.board.parallel.forEach((id) => locationById.set(id, 'Board · Parallel'));
+  state.board.parallel.forEach((id) => {
+    const card = state.cards[id];
+    if (isAdmin || isMajorCard(card)) {
+      locationById.set(id, 'Board · Parallel');
+    } else {
+      locationById.set(id, 'Deck / Hidden');
+    }
+  });
 
   state.board.event.forEach((id) => {
     if (state.eventRevealed) {
@@ -151,7 +258,8 @@ function buildDeckComponents(
 
 /**
  * Produces a strictly masked view for a specific player or full God Mode for admin.
- * Guarantees concealed Center, concealed Left Event, private opponent hands, and Days order never leak.
+ * Guarantees deterministic seed, concealed Center, concealed Left Event, private opponent hands,
+ * and Days order never leak to unauthorized players.
  */
 export function projectView(state: GameState, viewer: Viewer): ProjectedGameView {
   const isAdmin = viewer.role === 'admin';
@@ -195,10 +303,21 @@ export function projectView(state: GameState, viewer: Viewer): ProjectedGameView
     };
   });
 
-  const parallelItems: ProjectedBoardSlotItem[] = state.board.parallel.map((id) => ({
-    hidden: false,
-    card: state.cards[id]!
-  }));
+  const parallelItems: ProjectedBoardSlotItem[] = state.board.parallel.map((id) => {
+    const card = state.cards[id]!;
+    if (isAdmin || isMajorCard(card)) {
+      return {
+        hidden: false,
+        card,
+        privateToReader: !isMajorCard(card)
+      };
+    }
+    return {
+      hidden: true,
+      backGroup: card.backGroup,
+      label: 'Incoming Timeline (Concealed)'
+    };
+  });
 
   let eventReality: EventReality | null = null;
   if (state.board.event.length > 0 && canInspectEvent) {
@@ -227,8 +346,11 @@ export function projectView(state: GameState, viewer: Viewer): ProjectedGameView
 
   const players: ProjectedPlayerView[] = state.players.map((p) => {
     const canSeeHand = isAdmin || (viewer.role === 'player' && viewer.playerId === p.id);
+    const primaryAceId = p.lineage.cardIds[0]!;
+    const primaryAceCard = state.cards[primaryAceId]!;
     const topLineageId = p.lineage.cardIds[p.lineage.cardIds.length - 1]!;
     const topCard = state.cards[topLineageId]!;
+    const availableCount = getAvailableReaderBonusesForTurn(p, state.turn, state.ruleset).length;
 
     return {
       id: p.id,
@@ -238,6 +360,7 @@ export function projectView(state: GameState, viewer: Viewer): ProjectedGameView
         rank: p.lineage.rank,
         element: p.lineage.element,
         color: p.lineage.color,
+        primaryAceCard,
         topCard,
         stackDepth: p.lineage.cardIds.length,
         cardIds: [...p.lineage.cardIds]
@@ -245,7 +368,13 @@ export function projectView(state: GameState, viewer: Viewer): ProjectedGameView
       handCount: p.hand.length,
       hand: canSeeHand ? mapCardIds(p.hand, state.cards) : null,
       eclipseCount: p.eclipseCount,
-      pendingReaderBonusCount: p.pendingReaderBonuses.length,
+      eclipseBonusVP: p.eclipseBonusVP,
+      effectUsedThisTurn: p.effectUsedThisTurn,
+      elementalActionsUsedThisTurn: getElementalActionsUsedCount(p),
+      pendingReaderBonusCount: p.pendingReaderBonuses.filter(
+        (b) => b.status === 'pending_spec' || b.status === 'available'
+      ).length,
+      availableReaderBonusCount: availableCount,
       pendingReaderBonuses: [...p.pendingReaderBonuses],
       evolutionsCompleted: p.evolutionsCompleted,
       maxChainLength: p.maxChainLength,
@@ -255,11 +384,135 @@ export function projectView(state: GameState, viewer: Viewer): ProjectedGameView
     };
   });
 
+function resolveZoneVisibilityAndAccess(
+  state: GameState,
+  viewer: Viewer
+): { zoneVisibility: ZoneVisibilityState; zoneAccess: ZoneAccessState } {
+  const isAdmin = viewer.role === 'admin';
+  const hasReflection = state.activeEffects.some((e) => e.effectId === 'moon_reflection');
+  const hasGardenGates = state.activeEffects.some((e) => e.effectId === 'garden_gates');
+
+  // Admin God Mode always retains full read-only visibility across all zones.
+  const zoneVisibility: ZoneVisibilityState = isAdmin
+    ? { days: 'full', veil: 'full' }
+    : hasReflection
+      ? { days: 'top_only', veil: 'top_only' }
+      : { days: 'hidden', veil: 'full' };
+
+  // Accessibility is strictly separated from visibility:
+  // Moon Reflection alters visibility WITHOUT removing Water's underlying Veil retrieval ability;
+  // Garden Gates restricts zone accessibility independently of visibility.
+  const zoneAccess: ZoneAccessState = {
+    canInspectDays: true,
+    canManipulateDays: !hasGardenGates,
+    canInspectVeil: true,
+    canResurfaceFromVeil: !hasGardenGates
+  };
+
+  return { zoneVisibility, zoneAccess };
+}
+
+function buildMovementHistoryByCard(events: readonly GameEvent[]): Map<string, string[]> {
+  const history = new Map<string, string[]>();
+  for (const ev of events) {
+    if (ev.affectedCardIds.length === 0) continue;
+    if (
+      ev.type !== 'CardMoved' &&
+      ev.type !== 'CenterDiscarded' &&
+      ev.type !== 'CenterAbandoned' &&
+      ev.type !== 'AbandonedCardDeclined' &&
+      ev.type !== 'HandCardDiscarded' &&
+      ev.type !== 'ElementalEffectResolved'
+    ) {
+      continue;
+    }
+    const label = `R${ev.round}·T${ev.turn} · ${ev.reason}`;
+    for (const id of ev.affectedCardIds) {
+      const list = history.get(id) ?? [];
+      if (list[list.length - 1] !== label) {
+        list.push(label);
+      }
+      history.set(id, list);
+    }
+  }
+  return history;
+}
+
+function buildOrderedZoneItems(params: {
+  cardIds: readonly string[];
+  cards: Readonly<Record<string, Card>>;
+  visibilityMode: 'full' | 'top_only' | 'hidden';
+  movementHistory: Map<string, string[]>;
+  hiddenLabel: string;
+}): ProjectedOrderedZoneItem[] {
+  const { cardIds, cards, visibilityMode, movementHistory, hiddenLabel } = params;
+  return cardIds.map((id, idx) => {
+    const card = cards[id]!;
+    const position = idx + 1;
+    const isVisible =
+      visibilityMode === 'full' || (visibilityMode === 'top_only' && idx === 0);
+
+    if (!isVisible) {
+      return {
+        position,
+        hidden: true,
+        backGroup: card.backGroup,
+        label: hiddenLabel
+      };
+    }
+
+    return {
+      position,
+      hidden: false,
+      card,
+      backGroup: card.backGroup,
+      movementHistory: movementHistory.get(id) ?? ['Setup deal']
+    };
+  });
+}
+
+  const projectedEvents = projectEvents(state.events, viewer, state.ruleset.name);
+  const { zoneVisibility, zoneAccess } = resolveZoneVisibilityAndAccess(state, viewer);
+  const movementHistory = buildMovementHistoryByCard(projectedEvents);
+
+  const daysBrowserItems = buildOrderedZoneItems({
+    cardIds: state.days,
+    cards: state.cards,
+    visibilityMode: zoneVisibility.days,
+    movementHistory,
+    hiddenLabel: 'Concealed draw card'
+  });
+
+  // Veil browser is ordered newest discard first (#1 = Top)
+  const veilNewestFirstIds = [...state.veil].reverse();
+  const veilBrowserItems = buildOrderedZoneItems({
+    cardIds: veilNewestFirstIds,
+    cards: state.cards,
+    visibilityMode: zoneVisibility.veil,
+    movementHistory,
+    hiddenLabel: 'Concealed Veil history'
+  });
+
+  const pendingEarthReorder: ProjectedEarthReorderView | null = state.pendingEarthReorder
+    ? {
+        playerId: state.pendingEarthReorder.playerId,
+        strength: state.pendingEarthReorder.strength,
+        boardSlots: [...state.pendingEarthReorder.boardSlots],
+        daysCount: state.pendingEarthReorder.daysCount,
+        count: state.pendingEarthReorder.peekedCardIds.length,
+        cards:
+          isAdmin ||
+          (viewer.role === 'player' && viewer.playerId === state.pendingEarthReorder.playerId)
+            ? mapCardIds(state.pendingEarthReorder.peekedCardIds, state.cards)
+            : null
+      }
+    : null;
+
   return {
     viewer,
     engineVersion: state.engineVersion,
     ruleset: state.ruleset,
-    seed: state.seed,
+    seed: isAdmin ? state.seed : null,
     phase: state.phase,
     round: state.round,
     turn: state.turn,
@@ -271,6 +524,10 @@ export function projectView(state: GameState, viewer: Viewer): ProjectedGameView
     daysTopBackGroup: topDaysCard ? topDaysCard.backGroup : null,
     daysCards: isAdmin ? mapCardIds(state.days, state.cards) : null,
     veil: mapCardIds(state.veil, state.cards),
+    zoneVisibility,
+    zoneAccess,
+    daysBrowserItems,
+    veilBrowserItems,
     reserveCount: state.reserve.length,
     reserveCards: isAdmin ? mapCardIds(state.reserve, state.cards) : null,
     eventRevealed: state.eventRevealed,
@@ -280,6 +537,7 @@ export function projectView(state: GameState, viewer: Viewer): ProjectedGameView
     abandonedByPlayerId: state.abandonedByPlayerId,
     currentReading: currentReadingView,
     readingHistory: [...state.readingHistory],
+    pendingEarthReorder,
     board: {
       event: eventItems,
       center: centerItems,
@@ -288,7 +546,7 @@ export function projectView(state: GameState, viewer: Viewer): ProjectedGameView
     players,
     deckComponents: buildDeckComponents(state, viewer, canInspectCenter),
     legalActions: getLegalActionsForState(state, viewer),
-    events: projectEvents(state.events, viewer),
+    events: projectedEvents,
     commandCount: state.commandHistory.length
   };
 }
@@ -299,7 +557,7 @@ export interface ExportBundle {
   readonly viewerPlayerId?: string;
   readonly exportedAt: string;
   readonly engineVersion: string;
-  readonly seed: string;
+  readonly seed: string | null;
   readonly ruleset: GameState['ruleset'];
   readonly finalStateHash: string;
   readonly commands?: readonly Command[];
@@ -334,7 +592,7 @@ export function buildExportBundle(
     viewerPlayerId: viewer.playerId,
     exportedAt,
     engineVersion: state.engineVersion,
-    seed: state.seed,
+    seed: null,
     ruleset: state.ruleset,
     finalStateHash: state.stateHash,
     events: view.events,

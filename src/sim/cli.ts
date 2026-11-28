@@ -11,9 +11,9 @@ function parseArgs(argv: string[]): {
   json: boolean;
 } {
   let runs = 500;
-  let preset = 'poker-proto-c';
+  let preset = 'poker-proto-d1';
   let policy: AgentPolicyId = 'bluffing-rival';
-  let seedPrefix = 'nce-mc';
+  let seedPrefix = 'nce-md1';
   let json = false;
 
   for (let i = 0; i < argv.length; i++) {
