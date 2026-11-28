@@ -84,10 +84,10 @@ test.describe('Stage R1 — Real Browser Acceptance Walkthrough (Human vs Bot)',
 
     if (bonusText.includes('Earth')) {
       await page.getByTestId('deck-of-days-zone').click();
-      await page.getByRole('button', { name: /Privately Peek/i }).click();
+      await page.getByTestId('start-earth-peek-btn').click();
       await expect(page.getByTestId('earth-peek-cards')).toBeVisible();
       await page.screenshot({ path: path.join(SHOT_DIR, '06-turn3-earth-private-peek.png'), fullPage: true });
-      await page.getByRole('button', { name: 'Confirm Immediate Future Order' }).click();
+      await page.getByTestId('confirm-earth-order-btn').click();
     } else if (bonusText.includes('Water')) {
       await page.getByTestId('veil-browser').locator('.browser-item-card.clickable').first().click();
       await page.getByRole('button', { name: /Confirm: Resurface/i }).click();
@@ -183,5 +183,52 @@ test.describe('Stage R1 — Real Browser Acceptance Walkthrough (Human vs Bot)',
     await expect(page.locator('.hand-cards-grid')).toContainText('2♦');
     await expect(page.locator('.hand-cards-grid')).toContainText('3♥');
     await expect(page.getByTestId('veil-zone')).toContainText('0 cards');
+  });
+
+  test('Walkthrough D (Board-Set-First + Earth Board & Deck of Days Reorder + Chaining Setting On Hold): verifies stepper order, unified Earth peek/reorder across Board + Immediate Future, and Rules default', async ({
+    page
+  }) => {
+    await page.goto('/');
+
+    const seedInput = page.locator('input[placeholder="custom seed"]');
+    await seedInput.fill('e2e-seed-7');
+    await page.getByRole('button', { name: 'New Game' }).click();
+
+    // 1. Verify Board Set comes FIRST, then 1. Elemental Prep is active
+    const stepper = page.locator('.turn-stepper');
+    await expect(stepper).toContainText('Board Set');
+    await expect(stepper).toContainText('1. Elemental Prep');
+    await expect(stepper.locator('.turn-step-pill.step-done', { hasText: 'Board Set' })).toBeVisible();
+    await expect(stepper.locator('.turn-step-pill.step-current', { hasText: '1. Elemental Prep' })).toBeVisible();
+
+    // 2. Select 8♦ (Earth 3 VP) and target BOTH Board (Center + Parallel) AND Deck of Days (Immediate Future)
+    await page.locator('.hand-cards-grid .card-chip', { hasText: '8♦' }).click();
+    await page.locator('.board-slot-card', { hasText: 'Center' }).click();
+    await page.locator('.board-slot-card', { hasText: 'Parallel' }).click();
+    await page.getByTestId('deck-of-days-zone').click();
+
+    const peekBtn = page.getByTestId('start-earth-peek-btn');
+    await expect(peekBtn).toBeEnabled();
+    await peekBtn.click();
+
+    // 3. Verify private Earth reorder view labels both Board slots and Next Upcoming (#1)
+    const peekGrid = page.getByTestId('earth-peek-cards');
+    await expect(peekGrid).toBeVisible();
+    await expect(peekGrid).toContainText('Board · CENTER');
+    await expect(peekGrid).toContainText('Board · PARALLEL');
+    await expect(peekGrid).toContainText('Next Upcoming (#1)');
+
+    // Swap first card later, confirm deliberate order -> advances cleanly to Bot Reading!
+    await peekGrid.getByRole('button', { name: 'Later →' }).first().click();
+    await page.getByTestId('confirm-earth-order-btn').click();
+    await expect(page.getByTestId('accept-center-btn')).toBeVisible({ timeout: 10_000 });
+
+    // 4. Verify Rules tab exposes experimental chaining toggle defaulted to 1 (On Hold)
+    await page.getByRole('button', { name: 'Rules' }).click();
+    const chainingSelect = page
+      .locator('label', { hasText: 'Elemental Actions Per Turn' })
+      .locator('..')
+      .locator('select');
+    await expect(chainingSelect).toHaveValue('1');
   });
 });

@@ -1,5 +1,6 @@
 import {
   RULE_ANNOTATIONS,
+  type ElementalActionsPerTurnPolicy,
   type ElementalTimingPolicy,
   type EvolutionColorPolicy,
   type EvolutionTieBreakPolicy,
@@ -25,6 +26,7 @@ export interface RulesDraftState {
   readerBonusConsumesTurnAction: boolean;
   rotateEventOnCenterDiscard: boolean;
   elementalTiming: ElementalTimingPolicy;
+  maxElementalActionsPerTurn: ElementalActionsPerTurnPolicy;
   waterResurfaceDestination: WaterResurfaceDestination;
   elementalNativePrimaryBonusVP: number;
   trialTarget: 'event' | 'center';
@@ -202,8 +204,28 @@ export function RulesView({
                 onChangeDraft({ elementalTiming: e.target.value as ElementalTimingPolicy })
               }
             >
-              <option value="before_reading">Before Reading (Start of Turn · Milestone E Default)</option>
+              <option value="before_reading">Before Reading (Board Set → Elemental Prep)</option>
               <option value="after_encounter">After Encounter (Milestone D1 Baseline)</option>
+            </select>
+          </div>
+
+          <div className="field">
+            <label>Elemental Actions Per Turn (Chaining On Hold)</label>
+            <select
+              className="select"
+              value={String(draft.maxElementalActionsPerTurn)}
+              onChange={(e) => {
+                const raw = e.target.value;
+                onChangeDraft({
+                  maxElementalActionsPerTurn:
+                    raw === 'unlimited' ? 'unlimited' : (Number(raw) as 1 | 2 | 3)
+                });
+              }}
+            >
+              <option value="1">1 per turn (Standard Default — Chaining On Hold)</option>
+              <option value="2">2 per turn (Experimental Chain)</option>
+              <option value="3">3 per turn (Experimental Chain)</option>
+              <option value="unlimited">Unlimited (Experimental Massive Swings)</option>
             </select>
           </div>
 

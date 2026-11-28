@@ -152,6 +152,11 @@
 - **Guardrail:** Does **not** add an after-reading elemental action or alter `maxHandSize`.
 - **Creator Decision:** `PENDING`
 
+### `RD-17` — Chained Elemental Hand Actions Per Turn `[OPEN / ON HOLD · EXPERIMENTAL SETTING ONLY]`
+- **Creator Note (`28 Nov 2026`):** Interested in exploring chained hand elemental actions for dramatic swings, explicitly kept **on hold / experimental setting only** (`maxElementalActionsPerTurn: 1` remains the canonical default; `2`, `3`, or `'unlimited'` are exposed strictly as experimental toggles in the Rules tab).
+- **Turn Sequence Confirmed (`28 Nov 2026`):** **FIRST the Board is set (all 3 positions populated), THEN Elemental Prep from hand is available**, and elemental cards (Air/Fire/Earth) can affect order across **both the Board and the Deck of Days (Immediate Future)**.
+- **Creator Decision:** `ON HOLD (default = 1; experimental setting available in Rules)`
+
 ---
 
 ## Gate R5 Decisions — Future Sun/Moon Major Arcana (Deferred Until After R4)

@@ -46,6 +46,7 @@ export function computeStateHash(state: Omit<GameState, 'stateHash'>): string {
       eclipseCount: p.eclipseCount,
       eclipseBonusVP: p.eclipseBonusVP,
       effectUsedThisTurn: p.effectUsedThisTurn,
+      elementalActionsUsedThisTurn: p.elementalActionsUsedThisTurn ?? (p.effectUsedThisTurn ? 1 : 0),
       pendingReaderBonuses: p.pendingReaderBonuses,
       evolutionsCompleted: p.evolutionsCompleted,
       maxChainLength: p.maxChainLength,

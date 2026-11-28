@@ -22,6 +22,7 @@ export type BoardTargetSlot = 'event' | 'center' | 'parallel';
 export type WaterResurfaceDestination = 'shuffled' | 'top' | 'bottom';
 export type ReaderBonusPolicy = 'record_only' | 'free_tier1_elemental_next_turn';
 export type ElementalTimingPolicy = 'after_encounter' | 'before_reading';
+export type ElementalActionsPerTurnPolicy = 1 | 2 | 3 | 'unlimited';
 
 export type EvolutionColorPolicy = 'same-color' | 'same-element' | 'any';
 export type EvolutionTieBreakPolicy =
@@ -108,6 +109,7 @@ export interface Ruleset {
   readonly emptyChamberMode?: boolean; // R1 RD-15 AGREED: false fills all 3 Board slots on Turn 1; true leaves Parallel vacant until Major
   readonly rotateEventOnCenterDiscard: boolean; // Provisional: false (MC baseline) | true (D1 cleanup rotation)
   readonly elementalTiming: ElementalTimingPolicy; // 'after_encounter' (D1 baseline) | 'before_reading' (E default)
+  readonly maxElementalActionsPerTurn?: ElementalActionsPerTurnPolicy; // Baseline: 1; chaining (2/3/unlimited) on hold as experimental setting
   readonly elementalNativePrimaryBonusVP: number; // Provisional: 0 (uses exact card VP 1/2/3 by default)
   readonly waterResurfaceDestination: WaterResurfaceDestination; // Provisional: 'shuffled' | 'top' | 'bottom'
   readonly trialTargetElement: 'event' | 'center'; // Provisional default: 'event' (Left Event defines obstacle)
@@ -154,6 +156,7 @@ export interface PlayerState {
   readonly eclipseCount: number;
   readonly eclipseBonusVP: number; // Persistent Court/Champion VP bonus from completed Eclipses
   readonly effectUsedThisTurn: boolean;
+  readonly elementalActionsUsedThisTurn?: number;
   readonly secondaryElement?: Element; // Reserved, inactive in D1
   readonly pendingReaderBonuses: readonly PendingReaderBonus[];
   readonly evolutionsCompleted: number;
@@ -352,12 +355,14 @@ export type Command =
       readonly playerId: string;
       readonly bonusId: string;
     } & ElementalEffectPayload)
-  // Stage R1 RD-09: Cheat-proof private Earth Peek & Deliberate Reorder on Immediate Future
+  // Stage R1 RD-09: Cheat-proof private Earth Peek & Deliberate Reorder across Board and/or Immediate Future
   | {
       readonly type: 'StartEarthPeek';
       readonly playerId: string;
       readonly sourceCardId?: string;
       readonly bonusId?: string;
+      readonly targetBoardSlots?: readonly BoardTargetSlot[];
+      readonly daysCount?: number;
     }
   | {
       readonly type: 'CommitEarthReorder';
@@ -399,6 +404,8 @@ export interface PendingEarthReorderState {
   readonly sourceCardId: string | null;
   readonly bonusId: string | null;
   readonly strength: number;
+  readonly boardSlots: readonly BoardTargetSlot[];
+  readonly daysCount: number;
   readonly peekedCardIds: readonly string[];
   readonly returnPhase: GamePhase;
 }
@@ -406,6 +413,8 @@ export interface PendingEarthReorderState {
 export interface ProjectedEarthReorderView {
   readonly playerId: string;
   readonly strength: number;
+  readonly boardSlots: readonly BoardTargetSlot[];
+  readonly daysCount: number;
   readonly count: number;
   readonly cards: readonly Card[] | null; // Private to active caster (and Admin); null for opponents
 }
@@ -503,6 +512,7 @@ export interface ProjectedPlayerView {
   readonly eclipseCount: number;
   readonly eclipseBonusVP: number;
   readonly effectUsedThisTurn: boolean;
+  readonly elementalActionsUsedThisTurn: number;
   readonly pendingReaderBonusCount: number;
   readonly availableReaderBonusCount: number;
   readonly pendingReaderBonuses: readonly PendingReaderBonus[];

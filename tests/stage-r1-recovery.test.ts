@@ -320,6 +320,103 @@ describe('Stage R1 — First-Turn Reliability, Reject-Replace, 3-Slot Board, Any
     expect(checkInvariants(sWaterLegal).ok).toBe(true);
   });
 
+  it('Earth private peek & reorder works across Board slots alone AND across Board + Immediate Future together (board_and_days) without leaking to opponent', () => {
+    let s = createGame(classicR1, 'r1-earth-board-and-days', {
+      startingElements: ['air', 'fire'],
+      overrideHands: [
+        ['classic-earth-07', 'classic-water-05', 'classic-water-08'], // 7♦ = 3 VP Earth
+        ['classic-earth-09', 'classic-water-09', 'classic-air-09']
+      ],
+      overrideDaysTop: [
+        'classic-earth-06', // Board Event
+        'classic-water-04', // Board Center
+        'classic-fire-05',  // Board Parallel
+        'classic-air-02',   // Immediate Future #1
+        'classic-air-03',   // Immediate Future #2
+        'classic-water-07'  // Immediate Future #3
+      ]
+    });
+
+    // Target Board Center + Board Parallel + Immediate Future #1 (3 total = 3 VP Earth!)
+    s = mustDispatch(s, {
+      type: 'StartEarthPeek',
+      playerId: 'p1',
+      sourceCardId: 'classic-earth-07',
+      targetBoardSlots: ['center', 'parallel'],
+      daysCount: 1
+    });
+
+    expect(s.phase).toBe('AWAITING_EARTH_REORDER');
+    const p1View = projectView(s, { role: 'player', playerId: 'p1' });
+    const p2View = projectView(s, { role: 'player', playerId: 'p2' });
+    expect(p1View.pendingEarthReorder?.boardSlots).toEqual(['center', 'parallel']);
+    expect(p1View.pendingEarthReorder?.daysCount).toBe(1);
+    expect(p1View.pendingEarthReorder?.cards?.map((c) => c.id)).toEqual([
+      'classic-water-04',
+      'classic-fire-05',
+      'classic-air-02'
+    ]);
+    expect(p2View.pendingEarthReorder?.cards).toBeNull();
+
+    // Put classic-air-02 (from Days #1!) directly into Center, classic-water-04 into Parallel, and classic-fire-05 onto top of Days!
+    s = mustDispatch(s, {
+      type: 'CommitEarthReorder',
+      playerId: 'p1',
+      newOrder: ['classic-air-02', 'classic-water-04', 'classic-fire-05']
+    });
+
+    expect(s.board.center).toEqual(['classic-air-02']);
+    expect(s.board.parallel).toEqual(['classic-water-04']);
+    expect(s.days[0]).toBe('classic-fire-05');
+    expect(s.phase).toBe('AWAITING_READING');
+    expect(checkInvariants(s).ok).toBe(true);
+  });
+
+  it('RD-17 experimental setting: default maxElementalActionsPerTurn=1 enforces 1 hand action, while setting 2 allows chaining two hand effects before Reading', () => {
+    const chain2 = cloneRulesetWithOverrides(classicR1, { maxElementalActionsPerTurn: 2 });
+    let s = createGame(chain2, 'r1-experimental-chain-2', {
+      startingElements: ['air', 'fire'],
+      overrideHands: [
+        ['classic-fire-04', 'classic-air-05', 'classic-water-08'],
+        ['classic-earth-09', 'classic-water-09', 'classic-air-09']
+      ],
+      overrideDaysTop: [
+        'classic-earth-08',
+        'classic-water-04',
+        'classic-fire-05',
+        'classic-air-06',
+        'classic-water-07'
+      ]
+    });
+
+    // Action 1: Fire burns 1 card from Immediate Future -> stays in AWAITING_ELEMENTAL_ACTION because limit=2!
+    s = mustDispatch(s, {
+      type: 'UseElementalEffect',
+      playerId: 'p1',
+      element: 'fire',
+      sourceCardId: 'classic-fire-04',
+      targetZone: 'days',
+      daysCount: 1
+    });
+    expect(s.phase).toBe('AWAITING_ELEMENTAL_ACTION');
+    expect(s.players[0]!.elementalActionsUsedThisTurn).toBe(1);
+    expect(s.players[0]!.effectUsedThisTurn).toBe(false);
+
+    // Action 2: Air shuffles 1 card from Immediate Future -> hits limit=2 and advances to Reading!
+    s = mustDispatch(s, {
+      type: 'UseElementalEffect',
+      playerId: 'p1',
+      element: 'air',
+      sourceCardId: 'classic-air-05',
+      targetZone: 'days',
+      daysCount: 1
+    });
+    expect(s.players[0]!.elementalActionsUsedThisTurn).toBe(2);
+    expect(s.players[0]!.effectUsedThisTurn).toBe(true);
+    expect(s.phase).toBe('AWAITING_READING');
+    expect(checkInvariants(s).ok).toBe(true);
+  });
+
   it('passes 500-run Stage R1 simulation gate with zero invariant or replay failures', () => {
     const batch = runSimulationBatch({
       ruleset: classicR1,

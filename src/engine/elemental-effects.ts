@@ -58,6 +58,19 @@ export function computeElementalStrength(
   return { baseVP, nativeBonusVP, strength };
 }
 
+export function getElementalActionsUsedCount(player: PlayerState): number {
+  return player.elementalActionsUsedThisTurn ?? (player.effectUsedThisTurn ? 1 : 0);
+}
+
+export function hasRemainingHandElementalAction(
+  player: PlayerState,
+  ruleset: Ruleset
+): boolean {
+  const limit = ruleset.maxElementalActionsPerTurn ?? 1;
+  if (limit === 'unlimited') return true;
+  return getElementalActionsUsedCount(player) < limit;
+}
+
 export function canSpendReaderBonusInPhase(phase: GamePhase, ruleset: Ruleset): boolean {
   if (phase === 'AWAITING_ELEMENTAL_ACTION') return true;
   if (!ruleset.readerBonusAnytimeOnTurn) return false;
@@ -116,7 +129,7 @@ export function hasAnyLegalElementalAction(params: {
 
   const zones = { daysCount, veilCount, boardOccupiedCount };
 
-  if (!player.effectUsedThisTurn) {
+  if (hasRemainingHandElementalAction(player, ruleset)) {
     for (const cardId of player.hand) {
       const card = cards[cardId];
       if (card?.element && elementHasLegalTarget(card.element, zones)) {
@@ -125,7 +138,7 @@ export function hasAnyLegalElementalAction(params: {
     }
   }
 
-  if (!ruleset.readerBonusConsumesTurnAction || !player.effectUsedThisTurn) {
+  if (!ruleset.readerBonusConsumesTurnAction || hasRemainingHandElementalAction(player, ruleset)) {
     const bonuses = getAvailableReaderBonusesForTurn(player, turn, ruleset);
     for (const bonus of bonuses) {
       if (bonus.sourceElement && elementHasLegalTarget(bonus.sourceElement, zones)) {
@@ -1185,12 +1198,13 @@ export function validateAndExecuteElementalEffect(
 ): { ok: true } | { ok: false; error: ValidationError } {
   const activePlayer = ctx.players[ctx.activePlayerIndex]!;
 
-  if (activePlayer.effectUsedThisTurn) {
+  if (!hasRemainingHandElementalAction(activePlayer, ctx.ruleset)) {
+    const limit = ctx.ruleset.maxElementalActionsPerTurn ?? 1;
     return {
       ok: false,
       error: {
         code: 'EFFECT_ALREADY_USED_THIS_TURN',
-        message: `${activePlayer.name} has already used an elemental action this turn (max 1 per turn).`
+        message: `${activePlayer.name} has already used all elemental actions this turn (max ${limit} per turn).`
       }
     };
   }
@@ -1261,10 +1275,14 @@ export function validateAndExecuteElementalEffect(
 
   // ---- Atomic mutation starts here (all validation passed) ----
   const updatedHand = activePlayer.hand.filter((id) => id !== command.sourceCardId);
+  const nextUsedCount = getElementalActionsUsedCount(activePlayer) + 1;
+  const limit = ctx.ruleset.maxElementalActionsPerTurn ?? 1;
+  const exhausted = limit !== 'unlimited' && nextUsedCount >= limit;
   ctx.players[ctx.activePlayerIndex] = {
     ...activePlayer,
     hand: updatedHand,
-    effectUsedThisTurn: true
+    elementalActionsUsedThisTurn: nextUsedCount,
+    effectUsedThisTurn: exhausted
   };
   ctx.veil.push(command.sourceCardId);
 
@@ -1338,7 +1356,7 @@ export function validateAndExecuteReaderBonus(
     };
   }
 
-  if (ctx.ruleset.readerBonusConsumesTurnAction && activePlayer.effectUsedThisTurn) {
+  if (ctx.ruleset.readerBonusConsumesTurnAction && !hasRemainingHandElementalAction(activePlayer, ctx.ruleset)) {
     return {
       ok: false,
       error: {
@@ -1428,12 +1446,19 @@ export function validateAndExecuteReaderBonus(
       : b
   );
 
+  const nextUsedCount = ctx.ruleset.readerBonusConsumesTurnAction
+    ? getElementalActionsUsedCount(activePlayer) + 1
+    : getElementalActionsUsedCount(activePlayer);
+  const limit = ctx.ruleset.maxElementalActionsPerTurn ?? 1;
+  const exhausted = ctx.ruleset.readerBonusConsumesTurnAction
+    ? limit !== 'unlimited' && nextUsedCount >= limit
+    : activePlayer.effectUsedThisTurn;
+
   ctx.players[ctx.activePlayerIndex] = {
     ...activePlayer,
     pendingReaderBonuses: updatedBonuses,
-    effectUsedThisTurn: ctx.ruleset.readerBonusConsumesTurnAction
-      ? true
-      : activePlayer.effectUsedThisTurn
+    elementalActionsUsedThisTurn: nextUsedCount,
+    effectUsedThisTurn: exhausted
   };
 
   ctx.newEvents.push(

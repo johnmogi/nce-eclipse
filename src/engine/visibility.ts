@@ -1,6 +1,8 @@
 import {
   canSpendReaderBonusInPhase,
-  getAvailableReaderBonusesForTurn
+  getAvailableReaderBonusesForTurn,
+  getElementalActionsUsedCount,
+  hasRemainingHandElementalAction
 } from './elemental-effects.js';
 import { isMajorCard } from './majors.js';
 import { eventCardToReality } from './reconciliation.js';
@@ -92,10 +94,12 @@ export function getLegalActionsForState(state: GameState, viewer: Viewer): Comma
     case 'AWAITING_ELEMENTAL_ACTION': {
       const actions: Command['type'][] = [];
       if (activePlayer && state.ruleset.features.elementalEffects) {
-        if (!activePlayer.effectUsedThisTurn && activePlayer.hand.length > 0) {
+        const boardOccupied =
+          state.board.event.length + state.board.center.length + state.board.parallel.length;
+        if (hasRemainingHandElementalAction(activePlayer, state.ruleset) && activePlayer.hand.length > 0) {
           actions.push('UseElementalEffect');
           if (
-            state.days.length >= 2 &&
+            (state.days.length >= 2 || boardOccupied >= 2 || (boardOccupied >= 1 && state.days.length >= 1)) &&
             activePlayer.hand.some((id) => state.cards[id]?.element === 'earth')
           ) {
             actions.push('StartEarthPeek');
@@ -341,6 +345,7 @@ export function projectView(state: GameState, viewer: Viewer): ProjectedGameView
       eclipseCount: p.eclipseCount,
       eclipseBonusVP: p.eclipseBonusVP,
       effectUsedThisTurn: p.effectUsedThisTurn,
+      elementalActionsUsedThisTurn: getElementalActionsUsedCount(p),
       pendingReaderBonusCount: p.pendingReaderBonuses.filter(
         (b) => b.status === 'pending_spec' || b.status === 'available'
       ).length,
@@ -467,6 +472,8 @@ function buildOrderedZoneItems(params: {
     ? {
         playerId: state.pendingEarthReorder.playerId,
         strength: state.pendingEarthReorder.strength,
+        boardSlots: [...state.pendingEarthReorder.boardSlots],
+        daysCount: state.pendingEarthReorder.daysCount,
         count: state.pendingEarthReorder.peekedCardIds.length,
         cards:
           isAdmin ||

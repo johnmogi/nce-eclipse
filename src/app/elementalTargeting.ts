@@ -302,15 +302,26 @@ export function toggleBoardSlotSelection(
   let nextDaysSelected = selection.daysSelected;
   let nextDaysCount = selection.daysCount;
 
+  // Earth: allow targeting Board slots, Deck of Days (Immediate Future), OR BOTH together up to strength!
   if (ctx.activeElement === 'earth') {
-    // Earth board clicks switch cleanly into board reorder mode
-    nextDaysSelected = false;
+    if (nextDaysSelected) {
+      const remaining = ctx.strength - nextSlots.length;
+      if (remaining <= 0) {
+        nextDaysSelected = false;
+        nextDaysCount = 1;
+      } else if (nextDaysCount > remaining) {
+        nextDaysCount = remaining;
+      }
+    }
     const nextEarthMode: EarthActionMode =
-      nextSlots.length === 2 && ctx.canSwapBoard ? 'board_swap' : 'board_to_days_top';
+      nextSlots.length === 2 && !nextDaysSelected && ctx.canSwapBoard
+        ? 'board_swap'
+        : 'board_to_days_top';
     return {
       ...selection,
-      daysSelected: false,
       boardSlots: nextSlots,
+      daysSelected: nextDaysSelected,
+      daysCount: nextDaysCount,
       earthMode: nextSlots.length > 0 ? nextEarthMode : selection.earthMode
     };
   }
@@ -342,15 +353,31 @@ export function toggleDaysZoneSelection(
   if (!ctx.activeElement || !ctx.eligibleZones.days) return selection;
 
   if (ctx.activeElement === 'earth') {
-    const nextSelected = !selection.daysSelected;
+    if (selection.daysSelected) {
+      return { ...selection, daysSelected: false };
+    }
+    const remaining = ctx.strength - selection.boardSlots.length;
+    if (remaining <= 0) {
+      const reorderLen = Math.min(ctx.strength, daysAvailable);
+      const defaultOrder =
+        reorderLen === 3 ? [1, 2, 0] : reorderLen === 2 ? [1, 0] : [0, 1];
+      return {
+        ...selection,
+        daysSelected: true,
+        boardSlots: [],
+        daysCount: Math.min(ctx.strength, daysAvailable),
+        earthMode: ctx.strength >= 2 && daysAvailable >= 2 ? 'days_reorder' : 'days_to_bottom',
+        earthIndexOrder: defaultOrder
+      };
+    }
+    const pickDays = Math.min(remaining, daysAvailable);
     const reorderLen = Math.min(ctx.strength, daysAvailable);
     const defaultOrder =
       reorderLen === 3 ? [1, 2, 0] : reorderLen === 2 ? [1, 0] : [0, 1];
     return {
       ...selection,
-      daysSelected: nextSelected,
-      boardSlots: nextSelected ? [] : selection.boardSlots,
-      daysCount: 1,
+      daysSelected: true,
+      daysCount: pickDays,
       earthMode: ctx.strength >= 2 && daysAvailable >= 2 ? 'days_reorder' : 'days_to_bottom',
       earthIndexOrder: defaultOrder
     };

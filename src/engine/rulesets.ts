@@ -47,6 +47,7 @@ const BASE_MC_DEFAULTS = {
   emptyChamberMode: true,
   rotateEventOnCenterDiscard: false,
   elementalTiming: 'after_encounter' as const,
+  maxElementalActionsPerTurn: 1 as const,
   elementalNativePrimaryBonusVP: 0,
   waterResurfaceDestination: 'shuffled' as const
 };
@@ -60,6 +61,7 @@ const BASE_D1_DEFAULTS = {
   emptyChamberMode: true,
   rotateEventOnCenterDiscard: true,
   elementalTiming: 'after_encounter' as const,
+  maxElementalActionsPerTurn: 1 as const,
   elementalNativePrimaryBonusVP: 0,
   waterResurfaceDestination: 'shuffled' as const
 };
@@ -73,6 +75,7 @@ const BASE_E_DEFAULTS = {
   emptyChamberMode: false,
   rotateEventOnCenterDiscard: true,
   elementalTiming: 'before_reading' as const,
+  maxElementalActionsPerTurn: 1 as const,
   elementalNativePrimaryBonusVP: 0,
   waterResurfaceDestination: 'shuffled' as const
 };

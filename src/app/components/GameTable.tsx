@@ -23,10 +23,10 @@ import { DeckDaysBrowser } from './DeckDaysBrowser.js';
 import { VeilBrowser } from './VeilBrowser.js';
 
 const ELEMENT_VERB_HINT: Readonly<Record<Element, string>> = {
-  air: 'Shuffle — click Deck of Days (Immediate Future) or an occupied Board slot to shuffle unpredictably.',
-  fire: 'Burn — click Deck of Days (Immediate Future) or an occupied Board slot to burn straight to the Veil.',
+  air: 'Shuffle — click occupied Board slot(s) and/or Deck of Days (Immediate Future) to shuffle unpredictably.',
+  fire: 'Burn — click occupied Board slot(s) and/or Deck of Days (Immediate Future) to burn straight to the Veil.',
   water: 'Resurface — click The Veil below to select face-up cards to return to Deck of Days.',
-  earth: 'Reorder — click Deck of Days to privately peek & arrange the Immediate Future, or click an occupied Board slot.'
+  earth: 'Reorder — click occupied Board slot(s) and/or Deck of Days (Immediate Future) up to your VP to privately peek & arrange order across both!'
 };
 
 const READER_BONUS_ACTION_SPEC: Readonly<Record<Element, string>> = {
@@ -48,18 +48,18 @@ function getTurnProgressIndex(phase: GamePhase, preReadingElemental: boolean): n
     switch (phase) {
       case 'AWAITING_ELEMENTAL_ACTION':
       case 'AWAITING_EARTH_REORDER':
-        return 0; // Elemental Prep
+        return 1; // Elemental Prep (after Board Set)
       case 'AWAITING_ABANDONED_CHOICE':
       case 'AWAITING_READING':
       case 'AWAITING_READING_DECISION':
-        return 1; // Reading
+        return 2; // Reading
       case 'AWAITING_EVENT_RESOLUTION':
       case 'AWAITING_CENTER_DECISION':
       case 'AWAITING_HAND_DISCARD':
-        return 2; // Encounter
+        return 3; // Encounter
       case 'READY_TO_END_TURN':
       case 'GAME_OVER':
-        return 3; // End Turn
+        return 4; // End Turn
     }
   }
   switch (phase) {
@@ -88,6 +88,7 @@ const TURN_STEPS_POST = [
 ] as const;
 
 const TURN_STEPS_PRE = [
+  { id: 'board', label: 'Board Set' },
   { id: 'elemental', label: '1. Elemental Prep' },
   { id: 'reading', label: '2. Reading' },
   { id: 'encounter', label: '3. Encounter' },
@@ -802,9 +803,17 @@ export function GameTable({
             }`}
             style={{ marginLeft: 'auto' }}
           >
-            {activePlayer.effectUsedThisTurn
-              ? 'Elemental action used (0 left)'
-              : '1 elemental action available'}
+            {view.ruleset.maxElementalActionsPerTurn === 'unlimited'
+              ? `Elemental chaining ON (${activePlayer.elementalActionsUsedThisTurn} used)`
+              : (view.ruleset.maxElementalActionsPerTurn ?? 1) > 1
+                ? `${Math.max(
+                    0,
+                    (view.ruleset.maxElementalActionsPerTurn as number) -
+                      activePlayer.elementalActionsUsedThisTurn
+                  )}/${view.ruleset.maxElementalActionsPerTurn} elemental actions left`
+                : activePlayer.effectUsedThisTurn
+                  ? 'Elemental action used (0 left)'
+                  : '1 elemental action available'}
           </span>
         )}
       </div>
@@ -1087,13 +1096,19 @@ export function GameTable({
             <div className="action-row">
               <div>
                 <h2 className="decision-title">
-                  ♦ Earth Private Peek — Arrange The Immediate Future (Top{' '}
-                  {view.pendingEarthReorder.count} Card
-                  {view.pendingEarthReorder.count === 1 ? '' : 's'})
+                  ♦ Earth Private Peek — Arrange{' '}
+                  {view.pendingEarthReorder.boardSlots.length > 0 &&
+                  view.pendingEarthReorder.daysCount > 0
+                    ? `Board (${view.pendingEarthReorder.boardSlots.join(', ').toUpperCase()}) + Immediate Future (${view.pendingEarthReorder.daysCount})`
+                    : view.pendingEarthReorder.boardSlots.length > 0
+                      ? `Board Slots (${view.pendingEarthReorder.boardSlots.join(' ↔ ').toUpperCase()})`
+                      : `The Immediate Future (Top ${view.pendingEarthReorder.count} Card${
+                          view.pendingEarthReorder.count === 1 ? '' : 's'
+                        })`}
                 </h2>
                 <div className="brand-sub">
-                  Only you can see these cards. Arrange left → right (#1 = Next Upcoming drawn
-                  first), or send Next Upcoming to the bottom of Deck of Days.
+                  Only you can see these cards. Arrange left → right into exact Board and/or
+                  Immediate Future slots, then confirm.
                 </div>
               </div>
               <div className="toolbar-group">
@@ -1101,6 +1116,7 @@ export function GameTable({
                   <>
                     <button
                       className="btn btn-primary"
+                      data-testid="confirm-earth-order-btn"
                       onClick={() =>
                         onSendCommand({
                           type: 'CommitEarthReorder',
@@ -1109,20 +1125,22 @@ export function GameTable({
                         })
                       }
                     >
-                      Confirm Immediate Future Order
+                      Confirm Deliberate Order
                     </button>
-                    <button
-                      className="btn"
-                      onClick={() =>
-                        onSendCommand({
-                          type: 'CommitEarthReorder',
-                          playerId: view.activePlayerId,
-                          moveTopToBottom: true
-                        })
-                      }
-                    >
-                      Send Next Upcoming → Bottom of Deck
-                    </button>
+                    {view.pendingEarthReorder.boardSlots.length === 0 && (
+                      <button
+                        className="btn"
+                        onClick={() =>
+                          onSendCommand({
+                            type: 'CommitEarthReorder',
+                            playerId: view.activePlayerId,
+                            moveTopToBottom: true
+                          })
+                        }
+                      >
+                        Send Next Upcoming → Bottom of Deck
+                      </button>
+                    )}
                   </>
                 )}
               </div>
@@ -1133,6 +1151,13 @@ export function GameTable({
                 {earthPeekOrder.map((cardId, posIdx) => {
                   const card = view.pendingEarthReorder!.cards!.find((c) => c.id === cardId);
                   if (!card) return null;
+                  const bSlots = view.pendingEarthReorder!.boardSlots;
+                  const slotTitle =
+                    posIdx < bSlots.length
+                      ? `Board · ${bSlots[posIdx]!.toUpperCase()}`
+                      : posIdx - bSlots.length === 0
+                        ? 'Next Upcoming (#1)'
+                        : `#${posIdx - bSlots.length + 1} Upcoming`;
                   return (
                     <div
                       key={card.id}
@@ -1140,9 +1165,7 @@ export function GameTable({
                         card.color === 'red' ? 'color-red' : 'color-black'
                       }`}
                     >
-                      <div className="earth-pos-label">
-                        {posIdx === 0 ? 'Next Upcoming (#1)' : `#${posIdx + 1} Upcoming`}
-                      </div>
+                      <div className="earth-pos-label">{slotTitle}</div>
                       <div className="earth-card-face">{card.shortLabel}</div>
                       <div className="card-meta">
                         {card.label} ({card.vp} VP)
@@ -1171,7 +1194,7 @@ export function GameTable({
               </div>
             ) : (
               <div className="brand-sub">
-                {activePlayer.name} is privately inspecting the Immediate Future…
+                {activePlayer.name} is privately inspecting and reordering cards…
               </div>
             )}
           </div>
@@ -1198,54 +1221,74 @@ export function GameTable({
               </div>
 
               <div className="toolbar-group">
-                {activeElement && !(activeElement === 'earth' && elementalSelection.daysSelected) && (
-                  <>
-                    <button
-                      className="btn btn-primary"
-                      disabled={!cmdBuild.ok || !canActAsActivePlayer}
-                      onClick={() => {
-                        if (cmdBuild.ok) onSendCommand(cmdBuild.command);
-                      }}
-                    >
-                      {cmdBuild.ok ? `Confirm: ${cmdBuild.actionLabel}` : 'Select Target on Table'}
-                    </button>
-                    <button className="btn btn-sm" onClick={onCancelElemental}>
-                      Cancel
-                    </button>
-                  </>
-                )}
-                {activeElement === 'earth' && elementalSelection.daysSelected && (
-                  <>
-                    <button
-                      className="btn btn-primary"
-                      disabled={!canActAsActivePlayer || view.daysCount < 2}
-                      onClick={() =>
-                        onSendCommand(
-                          elementalSelection.sourceKind === 'bonus' && elementalCtx.bonus
-                            ? {
-                                type: 'StartEarthPeek',
-                                playerId: view.activePlayerId,
-                                bonusId: elementalCtx.bonus.id
-                              }
-                            : {
-                                type: 'StartEarthPeek',
-                                playerId: view.activePlayerId,
-                                sourceCardId: elementalCtx.sourceCard!.id
-                              }
-                        )
-                      }
-                    >
-                      👁 Privately Peek &amp; Arrange Top{' '}
-                      {Math.min(elementalCtx.strength, view.daysCount)} of Immediate Future
-                      {elementalCtx.sourceCard
-                        ? ` (Consumes ${elementalCtx.sourceCard.shortLabel} → Veil)`
-                        : ' (Free Reader Bonus)'}
-                    </button>
-                    <button className="btn btn-sm" onClick={onCancelElemental}>
-                      Cancel
-                    </button>
-                  </>
-                )}
+                {activeElement &&
+                  !(
+                    activeElement === 'earth' &&
+                    (elementalSelection.daysSelected || elementalSelection.boardSlots.length >= 2)
+                  ) && (
+                    <>
+                      <button
+                        className="btn btn-primary"
+                        disabled={!cmdBuild.ok || !canActAsActivePlayer}
+                        onClick={() => {
+                          if (cmdBuild.ok) onSendCommand(cmdBuild.command);
+                        }}
+                      >
+                        {cmdBuild.ok ? `Confirm: ${cmdBuild.actionLabel}` : 'Select Target on Table'}
+                      </button>
+                      <button className="btn btn-sm" onClick={onCancelElemental}>
+                        Cancel
+                      </button>
+                    </>
+                  )}
+                {activeElement === 'earth' &&
+                  (elementalSelection.daysSelected || elementalSelection.boardSlots.length >= 2) && (
+                    <>
+                      <button
+                        className="btn btn-primary"
+                        data-testid="start-earth-peek-btn"
+                        disabled={
+                          !canActAsActivePlayer ||
+                          (elementalSelection.boardSlots.length === 0 && view.daysCount < 2)
+                        }
+                        onClick={() => {
+                          const earthDays = elementalSelection.daysSelected
+                            ? elementalSelection.daysCount
+                            : 0;
+                          onSendCommand(
+                            elementalSelection.sourceKind === 'bonus' && elementalCtx.bonus
+                              ? {
+                                  type: 'StartEarthPeek',
+                                  playerId: view.activePlayerId,
+                                  bonusId: elementalCtx.bonus.id,
+                                  targetBoardSlots: elementalSelection.boardSlots,
+                                  daysCount: earthDays
+                                }
+                              : {
+                                  type: 'StartEarthPeek',
+                                  playerId: view.activePlayerId,
+                                  sourceCardId: elementalCtx.sourceCard!.id,
+                                  targetBoardSlots: elementalSelection.boardSlots,
+                                  daysCount: earthDays
+                                }
+                          );
+                        }}
+                      >
+                        👁 Privately Peek &amp; Arrange{' '}
+                        {elementalSelection.boardSlots.length > 0 && elementalSelection.daysSelected
+                          ? `Board (${elementalSelection.boardSlots.join('+')}) + ${elementalSelection.daysCount} Days`
+                          : elementalSelection.boardSlots.length >= 2
+                            ? `Board (${elementalSelection.boardSlots.join(' ↔ ')})`
+                            : `Top ${elementalSelection.daysCount} of Immediate Future`}
+                        {elementalCtx.sourceCard
+                          ? ` (Consumes ${elementalCtx.sourceCard.shortLabel} → Veil)`
+                          : ' (Free Reader Bonus)'}
+                      </button>
+                      <button className="btn btn-sm" onClick={onCancelElemental}>
+                        Cancel
+                      </button>
+                    </>
+                  )}
                 {preReadingElemental ? (
                   <button
                     className={`btn ${activeElement ? '' : 'btn-primary'}`}
@@ -1307,14 +1350,16 @@ export function GameTable({
               </div>
             )}
 
-            {(activeElement === 'air' || activeElement === 'fire') &&
+            {(activeElement === 'air' || activeElement === 'fire' || activeElement === 'earth') &&
               elementalSelection.daysSelected &&
               maxDaysPick > 1 && (
                 <div className="direct-controls-strip">
                   <span className="brand-sub">
                     {activeElement === 'air'
-                      ? 'Cards from Days to shuffle:'
-                      : 'Cards from Days to burn:'}
+                      ? 'Cards from Immediate Future to shuffle:'
+                      : activeElement === 'fire'
+                        ? 'Cards from Immediate Future to burn:'
+                        : 'Cards from Immediate Future to peek & reorder:'}
                   </span>
                   {Array.from({ length: maxDaysPick }, (_, i) => i + 1).map((n) => (
                     <button

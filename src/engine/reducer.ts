@@ -3,7 +3,9 @@ import {
   computeElementalStrength,
   expireUnusedReaderBonuses,
   getAvailableReaderBonusesForTurn,
+  getElementalActionsUsedCount,
   hasAnyLegalElementalAction,
+  hasRemainingHandElementalAction,
   validateAndExecuteElementalEffect,
   validateAndExecuteReaderBonus,
   type ElementalMutableContext
@@ -33,6 +35,7 @@ import {
 import { evaluateReconciliation, eventCardToReality } from './reconciliation.js';
 import { createGame } from './setup.js';
 import type {
+  BoardTargetSlot,
   Card,
   Command,
   CommandRecord,
@@ -1207,10 +1210,16 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
       if (!runComboCheck('UseElementalEffect')) {
         if (state.ruleset.elementalTiming === 'before_reading') {
           const currentActive = players[state.activePlayerIndex]!;
-          const hasExtraBonus =
-            !state.ruleset.readerBonusConsumesTurnAction &&
-            getAvailableReaderBonusesForTurn(currentActive, turn, state.ruleset).length > 0;
-          if (!hasExtraBonus) {
+          const canContinuePrep = hasAnyLegalElementalAction({
+            player: currentActive,
+            cards: state.cards,
+            turn,
+            ruleset: state.ruleset,
+            daysCount: days.length,
+            veilCount: veil.length,
+            boardOccupiedCount: boardEvent.length + boardCenter.length + boardParallel.length
+          });
+          if (!canContinuePrep) {
             enterReadingOrAbandonedPhase('UseElementalEffect');
           }
         } else {
@@ -1231,7 +1240,16 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
         if (state.phase === 'AWAITING_ELEMENTAL_ACTION') {
           if (state.ruleset.elementalTiming === 'before_reading') {
             const currentActive = players[state.activePlayerIndex]!;
-            if (currentActive.effectUsedThisTurn) {
+            const canContinuePrep = hasAnyLegalElementalAction({
+              player: currentActive,
+              cards: state.cards,
+              turn,
+              ruleset: state.ruleset,
+              daysCount: days.length,
+              veilCount: veil.length,
+              boardOccupiedCount: boardEvent.length + boardCenter.length + boardParallel.length
+            });
+            if (!canContinuePrep) {
               enterReadingOrAbandonedPhase('UseReaderBonus');
             }
           } else {
@@ -1264,17 +1282,12 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
         });
       }
 
-      if (days.length < 2) {
-        return fail(state, command, {
-          code: 'INSUFFICIENT_TARGET_CARDS',
-          message: 'Deck of Days needs at least 2 cards to inspect and reorder the Immediate Future.'
-        });
-      }
-
+      // Validate source BEFORE checking target bounds or mutating anything!
       let strength = 1;
       let sourceCommand: 'UseElementalEffect' | 'UseReaderBonus' = 'UseElementalEffect';
       let sourceCardId: string | null = null;
       let bonusId: string | null = null;
+      let bonusIdx = -1;
 
       if (isBonus && command.bonusId) {
         if (state.ruleset.readerBonusPolicy === 'record_only') {
@@ -1283,13 +1296,16 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
             message: 'Reader bonus spending is disabled in this ruleset.'
           });
         }
-        if (state.ruleset.readerBonusConsumesTurnAction && activePlayer.effectUsedThisTurn) {
+        if (
+          state.ruleset.readerBonusConsumesTurnAction &&
+          !hasRemainingHandElementalAction(activePlayer, state.ruleset)
+        ) {
           return fail(state, command, {
             code: 'EFFECT_ALREADY_USED_THIS_TURN',
             message: `${activePlayer.name} has already used their elemental action this turn.`
           });
         }
-        const bonusIdx = activePlayer.pendingReaderBonuses.findIndex((b) => b.id === command.bonusId);
+        bonusIdx = activePlayer.pendingReaderBonuses.findIndex((b) => b.id === command.bonusId);
         const bonus = bonusIdx >= 0 ? activePlayer.pendingReaderBonuses[bonusIdx] : undefined;
         if (!bonus || bonus.status !== 'available' || bonus.earnedOnTurn >= turn) {
           return fail(state, command, {
@@ -1303,39 +1319,14 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
             message: `Reader bonus "${bonus.id}" is ${bonus.sourceElement ?? 'none'}, not earth.`
           });
         }
-
-        // Consume bonus atomically BEFORE revealing Immediate Future cards (cheat-proof!)
-        const updatedBonuses = activePlayer.pendingReaderBonuses.map((b, idx) =>
-          idx === bonusIdx ? { ...b, status: 'consumed' as const, consumedOnTurn: turn } : b
-        );
-        players[state.activePlayerIndex] = {
-          ...activePlayer,
-          pendingReaderBonuses: updatedBonuses,
-          effectUsedThisTurn: state.ruleset.readerBonusConsumesTurnAction
-            ? true
-            : activePlayer.effectUsedThisTurn
-        };
         sourceCommand = 'UseReaderBonus';
         bonusId = bonus.id;
         strength = 1;
-
-        newEvents.push(
-          makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
-            actor: activePlayer.id,
-            type: 'ReaderBonusConsumed',
-            affectedCardIds: [bonus.sourceCardId],
-            source: 'StartEarthPeek',
-            reason: state.ruleset.readerBonusPolicy,
-            visibility: 'public',
-            summary: `${activePlayer.name} spent Earth Reader Bonus (Tier 1 · 0 hand cost) to inspect the Immediate Future.`,
-            payload: { bonusId: bonus.id, element: 'earth', strength: 1 }
-          })
-        );
       } else if (command.sourceCardId) {
-        if (activePlayer.effectUsedThisTurn) {
+        if (!hasRemainingHandElementalAction(activePlayer, state.ruleset)) {
           return fail(state, command, {
             code: 'EFFECT_ALREADY_USED_THIS_TURN',
-            message: `${activePlayer.name} has already used an elemental action this turn.`
+            message: `${activePlayer.name} has already used all elemental actions this turn.`
           });
         }
         if (!activePlayer.hand.includes(command.sourceCardId)) {
@@ -1354,15 +1345,121 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
         const computed = computeElementalStrength(activePlayer, sourceCard, state.ruleset);
         strength = computed.strength;
         sourceCardId = sourceCard.id;
+      } else {
+        return fail(state, command, {
+          code: 'INVALID_CARD',
+          message: 'StartEarthPeek requires either sourceCardId or bonusId.'
+        });
+      }
 
-        // Consume hand card -> Veil atomically BEFORE revealing cards (cheat-proof!)
+      // Validate requested Board slots + Immediate Future Days count BEFORE consuming source!
+      const requestedBoardSlots: BoardTargetSlot[] = [];
+      for (const slot of command.targetBoardSlots ?? []) {
+        if (slot !== 'event' && slot !== 'center' && slot !== 'parallel') {
+          return fail(state, command, {
+            code: 'INVALID_TARGET_SELECTION',
+            message: `Unsupported board slot "${String(slot)}".`
+          });
+        }
+        if (requestedBoardSlots.includes(slot)) {
+          return fail(state, command, {
+            code: 'INVALID_TARGET_SELECTION',
+            message: `Duplicate board slot "${slot}".`
+          });
+        }
+        const slotArr =
+          slot === 'event' ? boardEvent : slot === 'center' ? boardCenter : boardParallel;
+        if (slotArr.length === 0) {
+          return fail(state, command, {
+            code: 'INSUFFICIENT_TARGET_CARDS',
+            message: `Board slot "${slot}" is empty.`
+          });
+        }
+        requestedBoardSlots.push(slot);
+      }
+
+      const explicitDays = command.daysCount;
+      const effectiveDaysCount =
+        explicitDays !== undefined
+          ? explicitDays
+          : requestedBoardSlots.length > 0
+            ? 0
+            : Math.min(strength, days.length);
+
+      if (effectiveDaysCount < 0 || !Number.isInteger(effectiveDaysCount)) {
+        return fail(state, command, {
+          code: 'INVALID_TARGET_SELECTION',
+          message: `Invalid Earth daysCount "${effectiveDaysCount}".`
+        });
+      }
+      const totalSelected = requestedBoardSlots.length + effectiveDaysCount;
+      if (totalSelected === 0 || totalSelected > strength) {
+        return fail(state, command, {
+          code: 'INVALID_TARGET_SELECTION',
+          message: `Earth strength is ${strength}, but ${totalSelected} target(s) were selected.`
+        });
+      }
+      if (days.length < effectiveDaysCount) {
+        return fail(state, command, {
+          code: 'INSUFFICIENT_TARGET_CARDS',
+          message: `Deck of Days only has ${days.length} card(s), fewer than requested ${effectiveDaysCount}.`
+        });
+      }
+      if (requestedBoardSlots.length === 0 && days.length < 2) {
+        return fail(state, command, {
+          code: 'INSUFFICIENT_TARGET_CARDS',
+          message: 'Deck of Days needs at least 2 cards to inspect and reorder the Immediate Future.'
+        });
+      }
+      if (requestedBoardSlots.length > 0 && totalSelected < 2) {
+        return fail(state, command, {
+          code: 'INVALID_TARGET_SELECTION',
+          message: 'Reordering Board slots requires at least 2 targeted cards across Board and/or Deck of Days.'
+        });
+      }
+
+      // ---- Atomic consumption BEFORE revealing cards (cheat-proof!) ----
+      const limit = state.ruleset.maxElementalActionsPerTurn ?? 1;
+      if (isBonus && bonusId && bonusIdx >= 0) {
+        const bonus = activePlayer.pendingReaderBonuses[bonusIdx]!;
+        const updatedBonuses = activePlayer.pendingReaderBonuses.map((b, idx) =>
+          idx === bonusIdx ? { ...b, status: 'consumed' as const, consumedOnTurn: turn } : b
+        );
+        const nextUsed = state.ruleset.readerBonusConsumesTurnAction
+          ? getElementalActionsUsedCount(activePlayer) + 1
+          : getElementalActionsUsedCount(activePlayer);
+        const exhausted = state.ruleset.readerBonusConsumesTurnAction
+          ? limit !== 'unlimited' && nextUsed >= limit
+          : activePlayer.effectUsedThisTurn;
+        players[state.activePlayerIndex] = {
+          ...activePlayer,
+          pendingReaderBonuses: updatedBonuses,
+          elementalActionsUsedThisTurn: nextUsed,
+          effectUsedThisTurn: exhausted
+        };
+        newEvents.push(
+          makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
+            actor: activePlayer.id,
+            type: 'ReaderBonusConsumed',
+            affectedCardIds: [bonus.sourceCardId],
+            source: 'StartEarthPeek',
+            reason: state.ruleset.readerBonusPolicy,
+            visibility: 'public',
+            summary: `${activePlayer.name} spent Earth Reader Bonus (Tier 1 · 0 hand cost) to inspect the Immediate Future.`,
+            payload: { bonusId: bonus.id, element: 'earth', strength: 1 }
+          })
+        );
+      } else if (sourceCardId) {
+        const sourceCard = state.cards[sourceCardId]!;
+        const nextUsed = getElementalActionsUsedCount(activePlayer) + 1;
+        const exhausted = limit !== 'unlimited' && nextUsed >= limit;
         players[state.activePlayerIndex] = {
           ...activePlayer,
           hand: activePlayer.hand.filter((id) => id !== sourceCard.id),
-          effectUsedThisTurn: true
+          elementalActionsUsedThisTurn: nextUsed,
+          effectUsedThisTurn: exhausted
         };
         veil.push(sourceCard.id);
-
         newEvents.push(
           makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
             actor: activePlayer.id,
@@ -1371,8 +1468,14 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
             source: 'StartEarthPeek',
             reason: 'activate-earth-peek',
             visibility: 'public',
-            summary: `${activePlayer.name} activated Earth (♦) using ${sourceCard.label} (strength ${strength}) to inspect the Immediate Future.`,
-            payload: { element: 'earth', sourceCardId: sourceCard.id, strength }
+            summary: `${activePlayer.name} activated Earth (♦) using ${sourceCard.label} (strength ${strength}) to inspect and reorder.`,
+            payload: {
+              element: 'earth',
+              sourceCardId: sourceCard.id,
+              strength,
+              boardSlots: requestedBoardSlots,
+              daysCount: effectiveDaysCount
+            }
           })
         );
         newEvents.push(
@@ -1387,25 +1490,33 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
             payload: { from: 'hand', to: 'veil' }
           })
         );
-      } else {
-        return fail(state, command, {
-          code: 'INVALID_CARD',
-          message: 'StartEarthPeek requires either sourceCardId or bonusId.'
-        });
       }
 
-      const peekCount = Math.min(strength, days.length);
-      const peekedCardIds = days.slice(0, peekCount);
+      const boardPeekIds = requestedBoardSlots.map((slot) =>
+        slot === 'event' ? boardEvent[0]! : slot === 'center' ? boardCenter[0]! : boardParallel[0]!
+      );
+      const daysPeekIds = days.slice(0, effectiveDaysCount);
+      const peekedCardIds = [...boardPeekIds, ...daysPeekIds];
+
       pendingEarthReorder = {
         playerId: activePlayer.id,
         sourceCommand,
         sourceCardId,
         bonusId,
         strength,
+        boardSlots: requestedBoardSlots,
+        daysCount: effectiveDaysCount,
         peekedCardIds,
         returnPhase: state.phase
       };
       phase = 'AWAITING_EARTH_REORDER';
+
+      const scopeDesc =
+        requestedBoardSlots.length > 0 && effectiveDaysCount > 0
+          ? `${requestedBoardSlots.length} Board slot(s) + top ${effectiveDaysCount} of the Immediate Future`
+          : requestedBoardSlots.length > 0
+            ? `${requestedBoardSlots.length} Board slot(s)`
+            : `top ${effectiveDaysCount} card${effectiveDaysCount === 1 ? '' : 's'} of the Immediate Future`;
 
       newEvents.push(
         makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
@@ -1415,8 +1526,8 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
           source: 'StartEarthPeek',
           reason: 'earth-private-peek',
           visibility: 'public',
-          summary: `${activePlayer.name} privately inspected the top ${peekCount} card${peekCount === 1 ? '' : 's'} of the Immediate Future.`,
-          payload: { count: peekCount, strength }
+          summary: `${activePlayer.name} privately inspected ${scopeDesc}.`,
+          payload: { boardSlots: requestedBoardSlots, daysCount: effectiveDaysCount, strength }
         })
       );
       newEvents.push(
@@ -1427,8 +1538,8 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
           source: 'StartEarthPeek',
           reason: 'earth-private-peek-admin',
           visibility: 'admin_only',
-          summary: `[Admin] ${activePlayer.name} peeked at Immediate Future: ${peekedCardIds.map((id) => state.cards[id]!.label).join(', ')}.`,
-          payload: { peekedCardIds }
+          summary: `[Admin] ${activePlayer.name} peeked at ${scopeDesc}: ${peekedCardIds.map((id) => state.cards[id]!.label).join(', ')}.`,
+          payload: { peekedCardIds, boardSlots: requestedBoardSlots, daysCount: effectiveDaysCount }
         })
       );
       break;
@@ -1448,10 +1559,18 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
         });
       }
 
-      const { peekedCardIds, strength, sourceCommand, sourceCardId, bonusId, returnPhase } =
-        pendingEarthReorder;
+      const {
+        boardSlots,
+        daysCount,
+        peekedCardIds,
+        strength,
+        sourceCommand,
+        sourceCardId,
+        bonusId,
+        returnPhase
+      } = pendingEarthReorder;
 
-      if (command.moveTopToBottom) {
+      if (command.moveTopToBottom && boardSlots.length === 0) {
         const moved = days.shift()!;
         days.push(moved);
         newEvents.push(
@@ -1487,20 +1606,61 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
         ) {
           return fail(state, command, {
             code: 'INVALID_REORDER_SPEC',
-            message: 'Earth newOrder must be an exact permutation of the inspected Immediate Future cards.'
+            message: 'Earth newOrder must be an exact permutation of the inspected cards.'
           });
         }
-        days = [...newOrder, ...days.slice(peekedCardIds.length)];
+
+        const newBoardIds = newOrder.slice(0, boardSlots.length);
+        const newDaysTop = newOrder.slice(boardSlots.length);
+
+        boardSlots.forEach((slot, idx) => {
+          const placedId = newBoardIds[idx]!;
+          const placedMajor = isMajorCard(state.cards[placedId]);
+          if (slot === 'event') {
+            boardEvent = [placedId];
+            eventRevealed = placedMajor;
+          } else if (slot === 'parallel') {
+            boardParallel = [placedId];
+          } else {
+            boardCenter = [placedId];
+            centerRevealed = placedMajor;
+            centerAbandoned = false;
+            abandonedByPlayerId = null;
+          }
+        });
+        // Keep majorPending strictly synced to cards still physically on the Board
+        majorPending = majorPending.filter(
+          (m) =>
+            boardParallel.includes(m.cardId) ||
+            boardEvent.includes(m.cardId) ||
+            boardCenter.includes(m.cardId)
+        );
+        if (daysCount > 0) {
+          days = [...newDaysTop, ...days.slice(daysCount)];
+        }
+
+        const modeLabel =
+          boardSlots.length > 0 && daysCount > 0
+            ? 'board_and_days_reorder'
+            : boardSlots.length > 0
+              ? 'board_reorder'
+              : 'days_reorder';
+
         newEvents.push(
           makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
             actor: activePlayer.id,
             type: 'CardMoved',
             affectedCardIds: [],
             source: 'CommitEarthReorder',
-            reason: 'earth-reorder-days',
+            reason: `earth-${modeLabel}`,
             visibility: 'public',
-            summary: `${activePlayer.name} deliberately arranged the top ${peekedCardIds.length} card${peekedCardIds.length === 1 ? '' : 's'} of the Immediate Future.`,
-            payload: { zone: 'days', count: peekedCardIds.length }
+            summary:
+              boardSlots.length > 0 && daysCount > 0
+                ? `${activePlayer.name} deliberately reordered ${boardSlots.length} Board slot(s) and top ${daysCount} card(s) of the Immediate Future.`
+                : boardSlots.length > 0
+                  ? `${activePlayer.name} deliberately reordered Board slots (${boardSlots.join(' ↔ ')}).`
+                  : `${activePlayer.name} deliberately arranged the top ${daysCount} card${daysCount === 1 ? '' : 's'} of the Immediate Future.`,
+            payload: { boardSlots, daysCount }
           })
         );
         newEvents.push(
@@ -1509,10 +1669,10 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
             type: 'CardMoved',
             affectedCardIds: newOrder,
             source: 'CommitEarthReorder',
-            reason: 'earth-reorder-days-admin',
+            reason: `earth-${modeLabel}-admin`,
             visibility: 'admin_only',
-            summary: `[Admin] Earth arranged Immediate Future to: ${newOrder.map((id) => state.cards[id]!.label).join(' → ')}.`,
-            payload: { newOrder }
+            summary: `[Admin] Earth arranged ${modeLabel}: ${newOrder.map((id) => state.cards[id]!.label).join(' → ')}.`,
+            payload: { newOrder, boardSlots, daysCount }
           })
         );
         newEvents.push(
@@ -1521,31 +1681,39 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
             type: 'ElementalEffectResolved',
             affectedCardIds: [],
             source: sourceCommand,
-            reason: 'earth-days_reorder',
+            reason: `earth-${modeLabel}`,
             visibility: 'public',
-            summary: `${activePlayer.name} resolved Earth (Reorder · strength ${strength}, arranged top ${peekedCardIds.length} of Immediate Future).`,
-            payload: { element: 'earth', strength, mode: 'days_reorder', sourceCardId, bonusId }
+            summary: `${activePlayer.name} resolved Earth (Reorder · strength ${strength}, ${modeLabel}).`,
+            payload: { element: 'earth', strength, mode: modeLabel, sourceCardId, bonusId }
           })
         );
       }
 
       pendingEarthReorder = null;
-      if (returnPhase === 'AWAITING_ELEMENTAL_ACTION') {
-        if (state.ruleset.elementalTiming === 'before_reading') {
-          const currentActive = players[state.activePlayerIndex]!;
-          const hasExtraBonus =
-            !state.ruleset.readerBonusConsumesTurnAction &&
-            getAvailableReaderBonusesForTurn(currentActive, turn, state.ruleset).length > 0;
-          if (currentActive.effectUsedThisTurn && !hasExtraBonus) {
-            enterReadingOrAbandonedPhase('CommitEarthReorder');
+      if (!runComboCheck('CommitEarthReorder')) {
+        if (returnPhase === 'AWAITING_ELEMENTAL_ACTION') {
+          if (state.ruleset.elementalTiming === 'before_reading') {
+            const currentActive = players[state.activePlayerIndex]!;
+            const canContinuePrep = hasAnyLegalElementalAction({
+              player: currentActive,
+              cards: state.cards,
+              turn,
+              ruleset: state.ruleset,
+              daysCount: days.length,
+              veilCount: veil.length,
+              boardOccupiedCount: boardEvent.length + boardCenter.length + boardParallel.length
+            });
+            if (!canContinuePrep) {
+              enterReadingOrAbandonedPhase('CommitEarthReorder');
+            } else {
+              phase = 'AWAITING_ELEMENTAL_ACTION';
+            }
           } else {
-            phase = 'AWAITING_ELEMENTAL_ACTION';
+            phase = resolvePostEncounterPhase();
           }
         } else {
-          phase = resolvePostEncounterPhase();
+          phase = returnPhase;
         }
-      } else {
-        phase = returnPhase;
       }
       break;
     }
@@ -1585,7 +1753,8 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
       players[state.activePlayerIndex] = {
         ...afterExpiry,
         turnsTaken: afterExpiry.turnsTaken + 1,
-        effectUsedThisTurn: false
+        effectUsedThisTurn: false,
+        elementalActionsUsedThisTurn: 0
       };
 
       // D0 Finding D: Optional provisional rotation of unused Left Event when Center was discarded
@@ -1665,20 +1834,23 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
 
         if (!endedByEventDraw) {
           if (centerAbandoned && boardCenter.length > 0) {
-            const canPrep =
-              preReadingElementalRequested &&
-              hasAnyLegalElementalAction({
-                player: players[activePlayerIndex]!,
-                cards: state.cards,
-                turn,
-                ruleset: state.ruleset,
-                daysCount: days.length,
-                veilCount: veil.length,
-                boardOccupiedCount:
-                  boardEvent.length + boardCenter.length + boardParallel.length
-              });
-            phase = canPrep ? 'AWAITING_ELEMENTAL_ACTION' : 'AWAITING_ABANDONED_CHOICE';
-            currentReading = null;
+            // Ensure all 3 Board positions are set FIRST before Elemental Prep!
+            if (!populateParallelSlotFromDays('turn-refill')) {
+              const canPrep =
+                preReadingElementalRequested &&
+                hasAnyLegalElementalAction({
+                  player: players[activePlayerIndex]!,
+                  cards: state.cards,
+                  turn,
+                  ruleset: state.ruleset,
+                  daysCount: days.length,
+                  veilCount: veil.length,
+                  boardOccupiedCount:
+                    boardEvent.length + boardCenter.length + boardParallel.length
+                });
+              phase = canPrep ? 'AWAITING_ELEMENTAL_ACTION' : 'AWAITING_ABANDONED_CHOICE';
+              currentReading = null;
+            }
           } else if (boardCenter.length === 0 && !state.ruleset.emptyChamberMode && boardParallel.length > 0 && !isMajorCard(state.cards[boardParallel[0]!])) {
             // Stage R1 (RD-15): Slide concealed Minor from Right chamber -> Center, then refill Right from Days!
             const slidId = boardParallel.shift()!;

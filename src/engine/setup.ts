@@ -84,6 +84,7 @@ export function createGame(
       eclipseCount: 0,
       eclipseBonusVP: 0,
       effectUsedThisTurn: false,
+      elementalActionsUsedThisTurn: 0,
       pendingReaderBonuses: [],
       evolutionsCompleted: 0,
       maxChainLength: 0,
