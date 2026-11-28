@@ -3,6 +3,9 @@ import {
   getAvailableReaderBonusesForTurn
 } from '../engine/elemental-effects.js';
 import { isEligibleEvolution } from '../engine/evolution.js';
+import { getActiveCourtAuraVP } from '../engine/majors.js';
+import { projectView } from '../engine/visibility.js';
+import { chooseFairBotCommand } from './botController.js';
 import { isCardObjectivelyHelpful } from '../engine/readings.js';
 import { evaluateReconciliation, eventCardToReality } from '../engine/reconciliation.js';
 import type {
@@ -59,13 +62,20 @@ function findCheapestLegalSacrifice(
   eventCard: Card,
   centerCard: Card
 ): string[] | null {
+  const activeCourtAuraVP = getActiveCourtAuraVP({
+    player,
+    board: state.board,
+    majorPending: state.majorPending,
+    cards: state.cards
+  });
   const zero = evaluateReconciliation({
     player,
     eventCard,
     centerCard,
     sacrificeCardIds: [],
     cards: state.cards,
-    ruleset: state.ruleset
+    ruleset: state.ruleset,
+    activeCourtAuraVP
   });
   if (zero.passes) return [];
 
@@ -86,7 +96,8 @@ function findCheapestLegalSacrifice(
       centerCard,
       sacrificeCardIds: [id],
       cards: state.cards,
-      ruleset: state.ruleset
+      ruleset: state.ruleset,
+      activeCourtAuraVP
     });
     if (check.passes) return [id];
   }
@@ -100,7 +111,8 @@ function findCheapestLegalSacrifice(
         centerCard,
         sacrificeCardIds: pair,
         cards: state.cards,
-        ruleset: state.ruleset
+        ruleset: state.ruleset,
+        activeCourtAuraVP
       });
       if (check.passes) return pair;
     }
@@ -310,6 +322,26 @@ export function chooseNextCommand(state: GameState, policy: AgentPolicyId): Comm
       : { type: 'DiscardCenter', playerId };
   }
 
+  if (state.phase === 'AWAITING_MAJOR_CONTENTION' && state.pendingMajorContention) {
+    const chooserId = state.pendingMajorContention.playerId;
+    return chooseFairBotCommand(
+      projectView(state, { role: 'player', playerId: chooserId }),
+      chooserId,
+      policy
+    );
+  }
+
+  if (state.phase === 'AWAITING_MARKET' && state.market) {
+    const actorId = state.market.activeOffer
+      ? state.market.activeOffer.targetPlayerId
+      : state.activePlayerId;
+    return chooseFairBotCommand(
+      projectView(state, { role: 'player', playerId: actorId }),
+      actorId,
+      policy
+    );
+  }
+
   if (state.phase === 'AWAITING_EVENT_RESOLUTION') {
     const eventId = state.board.event[0];
     const centerId = state.board.center[0];
@@ -318,7 +350,7 @@ export function chooseNextCommand(state: GameState, policy: AgentPolicyId): Comm
     const centerCard = state.cards[centerId]!;
     const reality = eventCardToReality(eventCard);
 
-    if (reality === 'treasure') {
+    if (reality === 'treasure' || reality === 'major_resonance') {
       return { type: 'ResolveEvent', playerId, sacrificeCardIds: [] };
     }
 

@@ -6,7 +6,7 @@ export function formatBatchAsText(summary: BatchSimulationSummary): string {
     `Ruleset: ${summary.rulesetId} v${summary.rulesetVersion} | Policy: ${summary.policy}`,
     `Runs: ${summary.runs} | Seed Prefix: ${summary.seedPrefix} | Elapsed: ${summary.durationMs} ms`,
     '------------------------------------------------------------',
-    `Avg Turns (min-max): ${summary.avgTurns} (${summary.minTurns}-${summary.maxTurns}) | Avg Days Left: ${summary.avgDaysRemaining}`,
+    `Avg Turns (med/min-max): ${summary.avgTurns} (med ${summary.medianTurns}, ${summary.minTurns}-${summary.maxTurns}) | Avg Days Left: ${summary.avgDaysRemaining}`,
     `Avg Highest Rank:    ${summary.avgHighestRank} | Rank 7+: ${summary.pctReachingRank7Plus}% | Rank 9: ${summary.pctReachingRank9}%`,
     `Avg Evolutions/Game: ${summary.avgEvolutionsPerGame} | Multi-Step Chains: ${summary.multiStepChainRuns} runs (avg max ${summary.avgMaxChainLength})`,
     `Readings Given:      ${summary.totalReadings} (followed: ${summary.adviceFollowPct}%, bluffs: ${summary.deceptionPct}%, avg bonuses: ${summary.avgReaderBonuses})`,
@@ -15,7 +15,8 @@ export function formatBatchAsText(summary: BatchSimulationSummary): string {
     `Event Realities:     Treasures ${summary.totalTreasures} | Barriers Passed ${summary.totalBarriersPassed} | Trials Passed ${summary.totalTrialsPassed}`,
     `Abandonment Loop:    Abandoned ${summary.totalAbandoned} | Claimed ${summary.totalAbandonedClaimedFree} (${summary.abandonedClaimRatePct}%) | Declined ${summary.totalAbandonedDeclined} | Consecutive-Abandon Games ${summary.gamesWithConsecutiveAbandon} (win rate ${summary.winRateAfterConsecutiveAbandonPct}%)`,
     `Elemental Effects:   Air ${summary.totalAirEffects} | Fire ${summary.totalFireEffects} | Water ${summary.totalWaterEffects} | Earth ${summary.totalEarthEffects} (Revealed-Board: ${summary.totalRevealedBoardElementalActions})`,
-    `Majors & Combos:     Eclipses ${summary.totalEclipsesFormed} (${summary.eclipseVictories} wins) | Triangulation Wins ${summary.triangulationVictories}`,
+    `Majors & Combos:     Eclipses ${summary.totalEclipsesFormed} (${summary.eclipseVictories} wins) | Triangulation Wins ${summary.triangulationVictories} | Contentions ${summary.totalMajorContentions} (Rank 7+ choices: ${summary.totalRank7MajorChoices})`,
+    `Trading Market:      Windows ${summary.totalMarketWindows} | Proposals ${summary.totalTradeOffers} | Completed Trades ${summary.totalTradesCompleted}`,
     `Integrity Gates:     ${summary.invariantFailures} invariant failures, ${summary.replayFailures} replay failures`,
     '------------------------------------------------------------',
     `Element Breakdown:`

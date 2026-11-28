@@ -1,7 +1,17 @@
 # NEXUS ECLIPSE — RECOVERY & ACCEPTANCE PLAN
 
-**Strategy:** Controlled Gameplay Recovery (Preserve Proven NCE Engine — Freeze Feature Sprawl — Fix in Small Verified Vertical Slices)  
-**Reference Branch:** `feature/d1-elemental-gameplay` (PR #1 at `0f13de4`, preserved intact as reference baseline; `origin/main` remains at `f08d169`).
+**Strategy:** Complete 48-Card Classic MVP Re-Scaffold (Preserve Proven NCE Core — Replace Broken Major Lifecycle — Rebuild Modular Card-Game Interaction Layer — Deliver Complete Playable Game)  
+**Frozen R1.1 Snapshot:** Tag `v0.6.1-r1.1` (`87a90c1` on `feature/d1-elemental-gameplay` / PR #1; `origin/main` untouched at `f08d169`).  
+**Active Classic MVP Branch:** `re-scaffold` (`v0.7.0-classic-mvp`).
+
+---
+
+## 0. Current Stage Status
+
+- **Stage R0 (Contract & Audit):** **DONE**
+- **Stage R1 & R1.1 (First-Turn Reliability, Revealed-Board Intervention, AB-1 Abandonment, Save/Resume):** **DONE & TAGGED (`v0.6.1-r1.1`)**
+- **Stage R2 + R3 + Interaction Re-Scaffold (Classic Courts Lifecycle, Eclipse Spotlight, Deliberate Triangulation, Trading Market, Action Descriptors, Modular `src/app/table/` UI, Full-Game Bot, 1,000+ Simulations, Playwright Full-Game E2E):** **COMPLETE ON `re-scaffold` (`v0.7.0-classic-mvp`)**
+- **Stage R5 (Bespoke 20-Card Sun/Moon Expansion & Entropy/Renewal):** **DEFERRED (Feature-Flagged Inactive)**
 
 ---
 

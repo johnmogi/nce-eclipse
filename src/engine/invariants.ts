@@ -38,6 +38,9 @@ export function checkInvariants(state: GameState): InvariantReport {
   for (const id of state.board.event) track(id, 'board.event');
   for (const id of state.board.center) track(id, 'board.center');
   for (const id of state.board.parallel) track(id, 'board.parallel');
+  if (state.pendingMajorContention) {
+    track(state.pendingMajorContention.arrivingCardId, 'major_contention');
+  }
   // majorPending tracks dormancy metadata for Majors currently on the Board (not a separate physical zone)
   for (const pending of state.majorPending) {
     const onBoard =
@@ -53,6 +56,11 @@ export function checkInvariants(state: GameState): InvariantReport {
     for (const id of player.hand) track(id, `player(${player.id}).hand`);
     for (const id of player.lineage.cardIds) track(id, `player(${player.id}).lineage`);
     if (player.championCardId) track(player.championCardId, `player(${player.id}).champion`);
+    for (const trophy of player.eclipseTrophies ?? []) {
+      for (const keptId of trophy.keptCardIds) {
+        track(keptId, `player(${player.id}).eclipseTrophy(${trophy.id})`);
+      }
+    }
 
     if (player.lineage.cardIds.length === 0) {
       violations.push(`Player "${player.id}" has an empty lineage stack`);
@@ -180,6 +188,20 @@ export function checkInvariants(state: GameState): InvariantReport {
       ) {
         violations.push('pendingEarthReorder cards do not match targeted Board/Days slots');
       }
+    }
+  }
+
+  if (state.phase === 'AWAITING_MAJOR_CONTENTION') {
+    if (!state.pendingMajorContention) {
+      violations.push('AWAITING_MAJOR_CONTENTION requires pendingMajorContention state');
+    } else if (!state.board.parallel.includes(state.pendingMajorContention.incumbentCardId)) {
+      violations.push('pendingMajorContention incumbentCardId must currently occupy board.parallel');
+    }
+  }
+
+  if (state.phase === 'AWAITING_MARKET') {
+    if (!state.market) {
+      violations.push('AWAITING_MARKET requires active market state');
     }
   }
 

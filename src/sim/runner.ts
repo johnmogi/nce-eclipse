@@ -41,6 +41,11 @@ export interface SingleRunReport {
   readonly earthEffectsUsed: number;
   readonly eclipsesFormed: number;
   readonly triangulationsCompleted: number;
+  readonly majorContentionsResolved: number;
+  readonly rank7MajorChoices: number;
+  readonly marketWindowsOpened: number;
+  readonly tradeOffersProposed: number;
+  readonly tradesCompleted: number;
   readonly finalStateHash: string;
   readonly replayVerified: boolean;
   readonly invariantOk: boolean;
@@ -73,6 +78,7 @@ export interface BatchSimulationSummary {
   readonly invariantFailures: number;
   readonly replayFailures: number;
   readonly avgTurns: number;
+  readonly medianTurns: number;
   readonly minTurns: number;
   readonly maxTurns: number;
   readonly avgDaysRemaining: number;
@@ -108,6 +114,11 @@ export interface BatchSimulationSummary {
   readonly totalEclipsesFormed: number;
   readonly eclipseVictories: number;
   readonly triangulationVictories: number;
+  readonly totalMajorContentions: number;
+  readonly totalRank7MajorChoices: number;
+  readonly totalMarketWindows: number;
+  readonly totalTradeOffers: number;
+  readonly totalTradesCompleted: number;
   readonly byElement: readonly ElementSummary[];
   readonly sampleRuns: readonly SingleRunReport[];
 }
@@ -210,6 +221,13 @@ export function runSingleSimulation(
   );
   const eclipsesFormed = state.events.filter((e) => e.type === 'EclipseFormed').length;
   const triangulationsCompleted = state.events.filter((e) => e.type === 'TriangulationCompleted').length;
+  const majorContentionsResolved = state.events.filter((e) => e.type === 'MajorContentionResolved').length;
+  const rank7MajorChoices = state.events.filter(
+    (e) => e.type === 'MajorContentionResolved' && e.payload?.policy === 'rank7_choice'
+  ).length;
+  const marketWindowsOpened = state.events.filter((e) => e.type === 'MarketOpened').length;
+  const tradeOffersProposed = state.events.filter((e) => e.type === 'TradeProposed').length;
+  const tradesCompleted = state.events.filter((e) => e.type === 'TradeAccepted').length;
 
   let airEffectsUsed = 0;
   let fireEffectsUsed = 0;
@@ -263,6 +281,11 @@ export function runSingleSimulation(
     earthEffectsUsed,
     eclipsesFormed,
     triangulationsCompleted,
+    majorContentionsResolved,
+    rank7MajorChoices,
+    marketWindowsOpened,
+    tradeOffersProposed,
+    tradesCompleted,
     finalStateHash: state.stateHash,
     replayVerified,
     invariantOk,
@@ -327,6 +350,12 @@ export function runSimulationBatch(params: {
   let totalEclipsesFormed = 0;
   let eclipseVictories = 0;
   let triangulationVictories = 0;
+  let totalMajorContentions = 0;
+  let totalRank7MajorChoices = 0;
+  let totalMarketWindows = 0;
+  let totalTradeOffers = 0;
+  let totalTradesCompleted = 0;
+  const turnSamples: number[] = [];
 
   const elementStats: Record<Element, { appearances: number; rankSum: number; wins: number }> = {
     air: { appearances: 0, rankSum: 0, wins: 0 },
@@ -351,6 +380,7 @@ export function runSimulationBatch(params: {
     if (!report.replayVerified) replayFailures += 1;
 
     totalTurns += report.turns;
+    turnSamples.push(report.turns);
     minTurns = Math.min(minTurns, report.turns);
     maxTurns = Math.max(maxTurns, report.turns);
     totalDaysRemaining += report.daysRemaining;
@@ -386,6 +416,11 @@ export function runSimulationBatch(params: {
     totalWaterEffects += report.waterEffectsUsed;
     totalEarthEffects += report.earthEffectsUsed;
     totalEclipsesFormed += report.eclipsesFormed;
+    totalMajorContentions += report.majorContentionsResolved;
+    totalRank7MajorChoices += report.rank7MajorChoices;
+    totalMarketWindows += report.marketWindowsOpened;
+    totalTradeOffers += report.tradeOffersProposed;
+    totalTradesCompleted += report.tradesCompleted;
 
     for (const pr of report.playerFinalRanks) {
       const bucket = elementStats[pr.primaryElement];
@@ -423,6 +458,16 @@ export function runSimulationBatch(params: {
   const readerParityRatio =
     maxPlayerReadings > 0 ? Number((minPlayerReadings / maxPlayerReadings).toFixed(3)) : 1;
 
+  turnSamples.sort((a, b) => a - b);
+  const medianTurns =
+    turnSamples.length === 0
+      ? 0
+      : turnSamples.length % 2 === 1
+        ? turnSamples[Math.floor(turnSamples.length / 2)]!
+        : Number(
+            ((turnSamples[turnSamples.length / 2 - 1]! + turnSamples[turnSamples.length / 2]!) / 2).toFixed(1)
+          );
+
   return {
     rulesetId: ruleset.id,
     rulesetVersion: ruleset.version,
@@ -436,6 +481,7 @@ export function runSimulationBatch(params: {
     invariantFailures,
     replayFailures,
     avgTurns: Number((totalTurns / safeRuns).toFixed(2)),
+    medianTurns,
     minTurns: runs > 0 ? minTurns : 0,
     maxTurns,
     avgDaysRemaining: Number((totalDaysRemaining / safeRuns).toFixed(2)),
@@ -475,6 +521,11 @@ export function runSimulationBatch(params: {
     totalEclipsesFormed,
     eclipseVictories,
     triangulationVictories,
+    totalMajorContentions,
+    totalRank7MajorChoices,
+    totalMarketWindows,
+    totalTradeOffers,
+    totalTradesCompleted,
     byElement,
     sampleRuns
   };

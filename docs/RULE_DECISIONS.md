@@ -94,7 +94,7 @@
       - Otherwise, **Major Contention** resolves: if active player is **Rank 1–6**, **LIFO** applies (existing Parallel Court exits to Veil, newcomer takes Parallel dormant 1 turn); if active player is **Rank 7–9**, engine pauses in `AWAITING_MAJOR_CONTENTION` (`ChooseMajorExit`) so player chooses which Court stays and which exits to Veil!
     - Optional: Should `Parallel` hold **up to 2 Courts** (1 Active + 1 Dormant) before LIFO contention triggers so Eclipses can form naturally between two consecutive drawn Courts? **Yes — strongly recommended** (without 2 slots or paired check on arrival, opposite-color same-rank pairs would never coexist long enough to Eclipse!).
   - **Option B — Separate Active Altar (up to 2) + Dormant Parallel Queue:** Similar to Option A, visually separating dormant arriving Court from active Board Court(s).
-- **Creator Decision:** `PENDING`
+- **Creator Decision:** **`IMPLEMENTED IN CLASSIC MVP (re-scaffold v2.0.0 — Dedicated Parallel, 1-Turn Dormancy gating active buffs, Eclipse checked FIRST on arrival/contention, True LIFO default Rank 1-6, Rank 7-9 ChooseMajorExit pause, both_to_veil + persistent EclipseTrophy beside Ace)`**
 
 ### `RD-07` — How Triangulation (3 Majors on Event + Center + Parallel) Becomes Possible in Classic Mode `[CRITICAL · BLOCKS R2]`
 - **Problem:** Once Option A above stops automatic overflow into Event and Center, **how** can three Courts legally occupy `Event`, `Center`, and `Parallel` simultaneously to achieve Triangulation? (GDD §16 calls this *"the single most important spatial-rules gap"*.)
@@ -106,14 +106,14 @@
       2. Using **Water (tier 3 / 3 VP)** to resurface a Court from the Veil onto an open Board slot (`Event` or `Center`), OR **Earth (tier 2–3)** to reposition a Court onto Event/Center, OR **Rank 7–9 Contention** allowing a contending Court to be *pinned* onto Event/Center instead of discarded!
     - Result: Triangulation becomes a deliberate, dramatic late-game win (~5–15% of games) instead of an 88% turn-8 accident.
   - **Option B — Keep Courts in Parallel/Eclipse only for Classic; defer Triangulation to R5 (`Death/Rebirth` + `Merkabah`):** Classic mode wins via Eclipse (`players + 1`) or Days exhaustion; Triangulation unlocks with bespoke Sun/Moon Majors in R5.
-- **Creator Decision:** `PENDING`
+- **Creator Decision:** **`PROVISIONAL CLASSIC MVP DEFAULT (re-scaffold v2.0.0 — Option A deliberate Earth placement with R2-Center-Court-Guard; zero accidental overflow Triangulation)`**
 
 ### `RD-08` — Classic Court Active Buff Interaction with `maxEffectiveVP = 3` `[MEDIUM · BLOCKS R2]`
 - **Problem:** If a King (`+3`) is active on Board and `maxEffectiveVP = 3`, a player at Rank 1 (`1 VP`) + King (`+3`) hits the cap immediately; a player at Rank 7 (`3 VP`) gains `+0` net VP from the King unless Eclipse/Court bonuses either bypass or raise the cap slightly.
 - **Options:**
   - **Option A — Strict `maxEffectiveVP = 3` cap on everything:** Keeps introductory math flat (`1–3`); Courts mainly help low-rank players pass Barriers/Trials without sacrificing cards.
   - **Option B — Separate `maxBaseVP = 3` from persistent Eclipse bonus (`+1/+2/+3`):** Minor cards & lineage stay capped at 3, while earned Eclipses give tangible progression advantage.
-- **Creator Decision:** `PENDING`
+- **Creator Decision:** **`PROVISIONAL CLASSIC MVP DEFAULT (re-scaffold v2.0.0 — Option B: cappedBaseVP max 3 kept separate from activeCourtAuraVP + persistentEclipseBonusVP)`**
 
 ---
 
@@ -125,18 +125,18 @@
   - **Offer types:** Allow 1-for-1, multi-card uneven trades, and 1-way gifts (`[AGREED]`).
   - **Bot negotiation policy:** Fair masked-view evaluator that accepts trades improving its evolution proximity or VP balance (never peeking at hidden Days or Human's unoffered cards).
   - **Max offers per market window:** Cap at `2` proposals per player per market window so markets stay brisk (`[PROVISIONAL]`).
-- **Creator Decision:** `PENDING`
+- **Creator Decision:** **`IMPLEMENTED IN CLASSIC MVP (re-scaffold v2.0.0 — marketFrequencyRounds: 2, 1-for-1/uneven/gifts, privacy-safe counterCardIds, immediate post-trade chained evolution, fair masked-view bot negotiation)`**
 
 ### `RD-11` — "Winner of the Day" Tie-Break on Deck Exhaustion `[MEDIUM · BLOCKS R3/R4]`
 - **Options:**
   - **Option A — Eclipse Count → Lineage Rank → Evolutions Completed → Shared *(Recommended)*:** Rewards pursuing the primary Eclipse objective first, then personal growth.
   - **Option B — Lineage Rank → Eclipse Count → Shared:** Pure personal evolution honor per GDD §9.3 (*"strongest evolved player"*).
-- **Creator Decision:** `PENDING`
+- **Creator Decision:** **`PROVISIONAL CLASSIC MVP DEFAULT (re-scaffold v2.0.0 — Option A: Eclipse Count → Lineage Rank → Evolutions Completed → Shared)`**
 
 ### `RD-12` — Trial Formula Confirmation `[LOW · ALREADY IMPLEMENTED PROVISIONALLY]`
 - Currently: compares against **Left Event element** (`Water > Fire > Earth > Air > Water`), requires at least 1 advantageous card (lineage or sacrifice), grants `+1 VP` once, must strictly exceed Event VP (`> 1`), capped at `maxEffectiveVP = 3`.
 - **Decision needed:** Confirm as **`[AGREED]`** for Classic mode, or request adjustment.
-- **Creator Decision:** `PENDING`
+- **Creator Decision:** `PROVISIONAL (active in v2.0.0; awaiting final creator confirmation)`
 
 ---
 
@@ -150,7 +150,7 @@
   - **Option B — `'treasure_only'` *(Recommended compromise)*:** Automatically claim **Treasures** (when `hand.length < maxHandSize`) with a prominent result toast showing the claimed card and any chained evolution, while keeping explicit `Claim / Leave for Next Player` on Barriers & Trials so strategic abandonment is always preserved.
   - **Option C — `'all_zero_cost_below_cap'`:** Auto-claim Treasure, Barrier, and Trial whenever `0` sacrifices are needed AND `hand.length < maxHandSize` (removes strategic refusal on zero-cost obstacles — *not recommended* unless playtesters confirm they never refuse zero-cost cards).
 - **Guardrail:** Does **not** add an after-reading elemental action or alter `maxHandSize`.
-- **Creator Decision:** `PENDING`
+- **Creator Decision:** `PENDING (remains 'manual' in v2.0.0)`
 
 ### `RD-17` — Chained Elemental Hand Actions Per Turn `[OPEN / ON HOLD · EXPERIMENTAL SETTING ONLY]`
 - **Creator Note (`28 Nov 2026`):** Interested in exploring chained hand elemental actions for dramatic swings, explicitly kept **on hold / experimental setting only** (`maxElementalActionsPerTurn: 1` remains the canonical default; `2`, `3`, or `'unlimited'` are exposed strictly as experimental toggles in the Rules tab).

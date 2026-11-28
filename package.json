@@ -1,9 +1,9 @@
 {
   "name": "nexus-eclipse-engine",
-  "version": "0.6.1-r1",
+  "version": "0.7.0-classic-mvp",
   "private": true,
   "type": "module",
-  "description": "Nexus Central Engine (NCE) — Local-first deterministic TypeScript rules engine, CLI simulation lab, and playable tabletop UI for Nexus Eclipse (Stage R1 Stabilized Classic Prototype).",
+  "description": "Nexus Central Engine (NCE) — Local-first deterministic TypeScript rules engine, CLI simulation lab, and modular playable tabletop UI for Nexus Eclipse (Complete 48-Card Classic MVP Re-Scaffold).",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",

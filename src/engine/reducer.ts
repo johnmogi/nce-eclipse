@@ -23,10 +23,20 @@ import {
   activateReadyDormantMajors,
   drawNextMinorRoutingMajors,
   evaluateCombos,
+  getActiveCourtAuraVP,
   isMajorCard,
-  placeDrawnMajorOnBoard,
+  resolveMajorArrival,
+  resolveRank7MajorChoice,
   type MajorMutableBoard
 } from './majors.js';
+import {
+  createMarketState,
+  shouldOpenMarketAfterRound,
+  validateAndExecuteAcceptTrade,
+  validateAndExecuteProposeTrade,
+  validateAndExecuteRejectTrade,
+  type TradingMutableContext
+} from './trading.js';
 import {
   computeReadingHints,
   createReadingForTurn,
@@ -47,7 +57,9 @@ import type {
   GamePhase,
   GameState,
   MajorPendingEntry,
+  MarketState,
   PendingEarthReorderState,
+  PendingMajorContentionState,
   PlayerState,
   ReadingRecord,
   Ruleset,
@@ -71,9 +83,11 @@ const FUTURE_FEATURE_COMMANDS: Readonly<
   StartEarthPeek: { flag: 'elementalEffects', label: 'Earth Immediate Future Peek (Stage R1)' },
   CommitEarthReorder: { flag: 'elementalEffects', label: 'Earth Deliberate Reorder (Stage R1)' },
   AdvanceToReading: { flag: 'elementalEffects', label: 'Pre-Reading Elemental Prep (Milestone E)' },
-  ProposeTrade: { flag: 'tradingMarket', label: 'Trading Market (Milestone D2)' },
-  AcceptTrade: { flag: 'tradingMarket', label: 'Trading Market (Milestone D2)' },
-  ChooseMajorExit: { flag: 'majors', label: 'Major Arcana Contention (Milestone E)' },
+  ProposeTrade: { flag: 'tradingMarket', label: 'Trading Market (Classic MVP)' },
+  AcceptTrade: { flag: 'tradingMarket', label: 'Trading Market (Classic MVP)' },
+  RejectTrade: { flag: 'tradingMarket', label: 'Trading Market (Classic MVP)' },
+  CloseMarket: { flag: 'tradingMarket', label: 'Trading Market (Classic MVP)' },
+  ChooseMajorExit: { flag: 'majors', label: 'Major Arcana Contention (Classic MVP)' },
   ResolveEntropy: { flag: 'moonSunCycle', label: 'Moon/Sun Entropy Cycle (Milestone F)' }
 };
 
@@ -121,6 +135,31 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
         message: `Only designated reader ${state.currentReading.readerId} can give the reading, not ${command.playerId}.`
       });
     }
+  } else if (
+    command.type === 'ProposeTrade' ||
+    command.type === 'AcceptTrade' ||
+    command.type === 'RejectTrade' ||
+    command.type === 'CloseMarket'
+  ) {
+    if (state.phase !== 'AWAITING_MARKET' || !state.market) {
+      return fail(state, command, {
+        code: 'INVALID_PHASE',
+        message: `Market command "${command.type}" is only valid during AWAITING_MARKET (current: ${state.phase}).`
+      });
+    }
+  } else if (command.type === 'ChooseMajorExit') {
+    if (state.phase !== 'AWAITING_MAJOR_CONTENTION' || !state.pendingMajorContention) {
+      return fail(state, command, {
+        code: 'INVALID_PHASE',
+        message: `ChooseMajorExit is only valid during AWAITING_MAJOR_CONTENTION (current: ${state.phase}).`
+      });
+    }
+    if (command.playerId !== state.pendingMajorContention.playerId) {
+      return fail(state, command, {
+        code: 'NOT_ACTIVE_PLAYER',
+        message: `Only ${state.pendingMajorContention.playerId} can resolve this Major contention.`
+      });
+    }
   } else if (command.playerId !== state.activePlayerId) {
     return fail(state, command, {
       code: 'NOT_ACTIVE_PLAYER',
@@ -158,6 +197,17 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
   const readingHistory: ReadingRecord[] = [...state.readingHistory];
   let pendingEarthReorder: PendingEarthReorderState | null = state.pendingEarthReorder
     ? { ...state.pendingEarthReorder, peekedCardIds: [...state.pendingEarthReorder.peekedCardIds] }
+    : null;
+  let pendingMajorContention: PendingMajorContentionState | null = state.pendingMajorContention
+    ? { ...state.pendingMajorContention }
+    : null;
+  let market: MarketState | null = state.market
+    ? {
+        ...state.market,
+        offersMadeByPlayer: { ...state.market.offersMadeByPlayer },
+        passedPlayerIds: [...state.market.passedPlayerIds],
+        activeOffer: state.market.activeOffer ? { ...state.market.activeOffer } : null
+      }
     : null;
   let phase: GamePhase = state.phase;
   let turn = state.turn;
@@ -241,9 +291,14 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
       return false;
     }
     const mctx = makeMajorBoardCtx();
-    const drawEv = drawNextMinorRoutingMajors(mctx, 'event', source);
+    const drawEv = drawNextMinorRoutingMajors(mctx, 'event', source, 'populate_event');
     syncFromMajorBoardCtx(mctx);
     if (applyComboOutcomeIfAny(drawEv.outcome, source)) {
+      return true;
+    }
+    if (drawEv.pendingContention) {
+      pendingMajorContention = drawEv.pendingContention;
+      phase = 'AWAITING_MAJOR_CONTENTION';
       return true;
     }
     if (drawEv.minorCardId) {
@@ -292,9 +347,17 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
     const rightCard = state.cards[rightId]!;
     if (state.ruleset.features.majors && isMajorCard(rightCard)) {
       const mctx = makeMajorBoardCtx();
-      const outcome = placeDrawnMajorOnBoard(mctx, rightId, source);
+      const arrival = resolveMajorArrival(mctx, rightId, source, 'populate_parallel');
       syncFromMajorBoardCtx(mctx);
-      return applyComboOutcomeIfAny(outcome, source);
+      if (arrival.status === 'game_over') {
+        return applyComboOutcomeIfAny(arrival.outcome, source);
+      }
+      if (arrival.status === 'awaiting_choice' && arrival.pendingContention) {
+        pendingMajorContention = arrival.pendingContention;
+        phase = 'AWAITING_MAJOR_CONTENTION';
+        return true;
+      }
+      return false;
     }
     boardParallel.push(rightId);
     newEvents.push(
@@ -402,9 +465,20 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
       return false;
     }
     const mctx = makeMajorBoardCtx();
-    const drawCtr = drawNextMinorRoutingMajors(mctx, 'center', sourceName);
+    const drawCtr = drawNextMinorRoutingMajors(
+      mctx,
+      'center',
+      sourceName,
+      deferReadingForPreElemental ? 'populate_center_pre_elemental' : 'populate_center_reading',
+      { deferReadingForPreElemental }
+    );
     syncFromMajorBoardCtx(mctx);
     if (applyComboOutcomeIfAny(drawCtr.outcome, sourceName)) {
+      return true;
+    }
+    if (drawCtr.pendingContention) {
+      pendingMajorContention = drawCtr.pendingContention;
+      phase = 'AWAITING_MAJOR_CONTENTION';
       return true;
     }
     if (!drawCtr.minorCardId) {
@@ -598,9 +672,19 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
     if (boardEvent.length === 0) {
       if (days.length > 0) {
         const mctx = makeMajorBoardCtx();
-        const drawEv = drawNextMinorRoutingMajors(mctx, 'event', `${sourceName}-event-replacement`);
+        const drawEv = drawNextMinorRoutingMajors(
+          mctx,
+          'event',
+          `${sourceName}-event-replacement`,
+          'revealed_event_replacement'
+        );
         syncFromMajorBoardCtx(mctx);
         if (applyComboOutcomeIfAny(drawEv.outcome, `${sourceName}-event-replacement`)) {
+          return;
+        }
+        if (drawEv.pendingContention) {
+          pendingMajorContention = drawEv.pendingContention;
+          phase = 'AWAITING_MAJOR_CONTENTION';
           return;
         }
         if (drawEv.minorCardId) {
@@ -1056,9 +1140,19 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
         let replacementId: string | null = null;
         if (days.length > 0) {
           const mctx = makeMajorBoardCtx();
-          const drawRep = drawNextMinorRoutingMajors(mctx, 'center', 'DiscardCenter-replacement');
+          const drawRep = drawNextMinorRoutingMajors(
+            mctx,
+            'center',
+            'DiscardCenter-replacement',
+            'discard_replacement'
+          );
           syncFromMajorBoardCtx(mctx);
           if (applyComboOutcomeIfAny(drawRep.outcome, 'DiscardCenter-replacement')) {
+            break;
+          }
+          if (drawRep.pendingContention) {
+            pendingMajorContention = drawRep.pendingContention;
+            phase = 'AWAITING_MAJOR_CONTENTION';
             break;
           }
           replacementId = drawRep.minorCardId;
@@ -1152,20 +1246,30 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
 
       const eventCard = state.cards[boardEvent[0]!]!;
       const centerCard = state.cards[boardCenter[0]!]!;
+      const activeCourtAuraVP = getActiveCourtAuraVP({
+        player: activePlayer,
+        board: { event: boardEvent, center: boardCenter, parallel: boardParallel },
+        majorPending,
+        cards: state.cards
+      });
       const breakdown = evaluateReconciliation({
         player: activePlayer,
         eventCard,
         centerCard,
         sacrificeCardIds: command.sacrificeCardIds,
         cards: state.cards,
-        ruleset: state.ruleset
+        ruleset: state.ruleset,
+        activeCourtAuraVP
       });
 
       if (!breakdown.passes) {
-        if (breakdown.reality === 'treasure' && command.sacrificeCardIds.length > 0) {
+        if (
+          (breakdown.reality === 'treasure' || breakdown.reality === 'major_resonance') &&
+          command.sacrificeCardIds.length > 0
+        ) {
           return fail(state, command, {
             code: 'UNEXPECTED_SACRIFICE',
-            message: breakdown.failureReason ?? 'Treasure requires no sacrifice.',
+            message: breakdown.failureReason ?? 'No sacrifice required.',
             details: { breakdown }
           });
         }
@@ -1210,16 +1314,22 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
         );
       }
 
-      if (breakdown.reality === 'treasure') {
+      if (breakdown.reality === 'treasure' || breakdown.reality === 'major_resonance') {
         newEvents.push(
           makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
             actor: activePlayer.id,
             type: 'TreasureClaimed',
             affectedCardIds: [centerCard.id],
             source: 'ResolveEvent',
-            reason: 'treasure-free-claim',
+            reason:
+              breakdown.reality === 'major_resonance'
+                ? 'major-resonance-claim'
+                : 'treasure-free-claim',
             visibility: 'public',
-            summary: `${activePlayer.name} claimed ${centerCard.label} as a Treasure (Event ${eventCard.label}, 3 VP).`,
+            summary:
+              breakdown.reality === 'major_resonance'
+                ? `${activePlayer.name} claimed ${centerCard.label} under Major Resonance (${eventCard.label} anchored in Event).`
+                : `${activePlayer.name} claimed ${centerCard.label} as a Treasure (Event ${eventCard.label}, 3 VP).`,
             payload: { breakdown }
           })
         );
@@ -1293,10 +1403,13 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
       const eventCard = state.cards[boardEvent[0]!]!;
       const centerCard = state.cards[boardCenter[0]!]!;
       const reality = eventCardToReality(eventCard);
-      if (reality === 'treasure') {
+      if (reality === 'treasure' || reality === 'major_resonance') {
         return fail(state, command, {
           code: 'CANNOT_ABANDON_TREASURE',
-          message: 'Treasure has no obstacle; claim it freely instead of abandoning.'
+          message:
+            reality === 'major_resonance'
+              ? 'Major Resonance has no Minor obstacle; claim Center cleanly instead of abandoning.'
+              : 'Treasure has no obstacle; claim it freely instead of abandoning.'
         });
       }
 
@@ -1876,6 +1989,54 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
         const newBoardIds = newOrder.slice(0, boardSlots.length);
         const newDaysTop = newOrder.slice(boardSlots.length);
 
+        // R2-Center-Court-Guard (RD-07): A Classic Court may only be placed into Center via Earth
+        // if doing so immediately completes an Eclipse or Triangulation (prevents solo unclaimable Court stalling Reading).
+        const centerSlotIdx = boardSlots.indexOf('center');
+        if (centerSlotIdx >= 0 && isMajorCard(state.cards[newBoardIds[centerSlotIdx]!])) {
+          let simEv = boardEvent[0];
+          let simCtr = boardCenter[0];
+          let simPar = boardParallel[0];
+          boardSlots.forEach((slot, idx) => {
+            if (slot === 'event') simEv = newBoardIds[idx]!;
+            else if (slot === 'center') simCtr = newBoardIds[idx]!;
+            else simPar = newBoardIds[idx]!;
+          });
+          const simCards = [simEv, simCtr, simPar]
+            .map((id) => (id ? state.cards[id] : undefined))
+            .filter((c): c is Card => Boolean(c));
+          const formsTriangulation =
+            state.ruleset.features.triangulation &&
+            simCards.length === 3 &&
+            simCards.every((c) => isMajorCard(c));
+          let formsEclipse = false;
+          if (state.ruleset.features.eclipse) {
+            for (let i = 0; i < simCards.length; i++) {
+              for (let j = i + 1; j < simCards.length; j++) {
+                const a = simCards[i]!;
+                const b = simCards[j]!;
+                if (
+                  a.family === 'classic-court' &&
+                  b.family === 'classic-court' &&
+                  a.rank === b.rank &&
+                  a.color &&
+                  b.color &&
+                  a.color !== b.color
+                ) {
+                  formsEclipse = true;
+                }
+              }
+            }
+          }
+          if (!formsTriangulation && !formsEclipse) {
+            return fail(state, command, {
+              code: 'COURT_CANNOT_OCCUPY_CENTER_WITHOUT_COMBO',
+              message:
+                'A Classic Court can only be placed into Center via Earth when doing so immediately completes an Eclipse or Triangulation.'
+            });
+          }
+        }
+
+        const prevBoardSet = new Set([...boardEvent, ...boardCenter, ...boardParallel]);
         const keepBoardRevealed = returnPhase === 'AWAITING_EVENT_RESOLUTION';
         boardSlots.forEach((slot, idx) => {
           const placedId = newBoardIds[idx]!;
@@ -1890,6 +2051,9 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
             centerRevealed = keepBoardRevealed || placedMajor;
             centerAbandoned = false;
             abandonedByPlayerId = null;
+          }
+          if (placedMajor && !prevBoardSet.has(placedId)) {
+            majorPending.push({ cardId: placedId, dormantUntilTurn: turn + 1 });
           }
         });
         // Keep majorPending strictly synced to cards still physically on the Board
@@ -2068,10 +2232,38 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
       } else {
         turn += 1;
         activePlayerIndex = (activePlayerIndex + 1) % players.length;
+        const completedRound = activePlayerIndex === 0 ? round : 0;
         if (activePlayerIndex === 0) {
           round += 1;
         }
         activePlayerId = players[activePlayerIndex]!.id;
+
+        // Classic MVP R3: Open scheduled round-boundary Trading Market when both/any players hold tradable cards!
+        if (
+          completedRound > 0 &&
+          shouldOpenMarketAfterRound(completedRound, state.ruleset) &&
+          players.some((p) => p.hand.length > 0)
+        ) {
+          market = createMarketState(completedRound, players);
+          phase = 'AWAITING_MARKET';
+          currentReading = null;
+          newEvents.push(
+            makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
+              actor: 'system',
+              type: 'MarketOpened',
+              affectedCardIds: [],
+              source: 'EndTurn',
+              reason: 'scheduled-round-boundary',
+              visibility: 'public',
+              summary: `Trading Market opened after Round ${completedRound}! Players may propose consensual trades or gifts before Round ${round} begins.`,
+              payload: {
+                openedAfterRound: completedRound,
+                maxOffersPerPlayer: market.maxOffersPerPlayer
+              }
+            })
+          );
+          break;
+        }
 
         // Awaken any dormant Major Arcana whose dormancy expires on this turn
         if (state.ruleset.features.majors && majorPending.length > 0) {
@@ -2241,6 +2433,388 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
       break;
     }
 
+    case 'ChooseMajorExit': {
+      if (state.phase !== 'AWAITING_MAJOR_CONTENTION' || !pendingMajorContention) {
+        return fail(state, command, {
+          code: 'INVALID_PHASE',
+          message: 'No active Major contention choice to resolve.'
+        });
+      }
+      const pending = pendingMajorContention;
+      if (
+        command.cardId !== pending.incumbentCardId &&
+        command.cardId !== pending.arrivingCardId
+      ) {
+        return fail(state, command, {
+          code: 'INVALID_MAJOR_CONTENTION_CHOICE',
+          message: `Choose either resident "${pending.incumbentCardId}" or arriving "${pending.arrivingCardId}" to exit to the Veil.`
+        });
+      }
+
+      const mctx = makeMajorBoardCtx();
+      const contentionWin = resolveRank7MajorChoice(mctx, pending, command.cardId);
+      syncFromMajorBoardCtx(mctx);
+      pendingMajorContention = null;
+
+      if (applyComboOutcomeIfAny(contentionWin, 'ChooseMajorExit')) {
+        break;
+      }
+
+      const preReadingElementalRequested =
+        state.ruleset.features.elementalEffects &&
+        state.ruleset.elementalTiming === 'before_reading';
+
+      // Resume the interrupted Board draw / encounter step seamlessly!
+      if (pending.resumeContext === 'revealed_event_replacement') {
+        reconcilePostRevealedBoardMutation('ChooseMajorExit', null, boardCenter[0] ?? null);
+      } else if (pending.resumeContext === 'discard_replacement') {
+        let replacementId: string | null = null;
+        if (days.length > 0) {
+          const m2 = makeMajorBoardCtx();
+          const drawRep = drawNextMinorRoutingMajors(
+            m2,
+            'center',
+            'DiscardCenter-replacement',
+            'discard_replacement'
+          );
+          syncFromMajorBoardCtx(m2);
+          if (applyComboOutcomeIfAny(drawRep.outcome, 'DiscardCenter-replacement')) break;
+          if (drawRep.pendingContention) {
+            pendingMajorContention = drawRep.pendingContention;
+            phase = 'AWAITING_MAJOR_CONTENTION';
+            break;
+          }
+          replacementId = drawRep.minorCardId;
+        }
+        if (replacementId) {
+          const repCard = state.cards[replacementId]!;
+          boardCenter.push(replacementId);
+          centerRevealed = true;
+          newEvents.push(
+            makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
+              actor: activePlayer.id,
+              type: 'CardMoved',
+              affectedCardIds: [replacementId],
+              source: 'DiscardCenter',
+              reason: 'replacement-after-reject',
+              visibility: 'public',
+              summary: `${activePlayer.name} drew and flipped replacement Center card: ${repCard.label} (${repCard.vp} VP).`,
+              payload: { from: 'days', to: 'center', replacement: true }
+            })
+          );
+          if (state.ruleset.features.barriersAndTrials && boardEvent.length > 0) {
+            const eventId = boardEvent[0]!;
+            const eventCard = state.cards[eventId]!;
+            eventRevealed = true;
+            const reality = eventCardToReality(eventCard);
+            phase = 'AWAITING_EVENT_RESOLUTION';
+            newEvents.push(
+              makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
+                actor: 'system',
+                type: 'EventRevealed',
+                affectedCardIds: [eventId],
+                source: 'DiscardCenter',
+                reason: `left-event-${reality}`,
+                visibility: 'public',
+                summary: `Left Event revealed for replacement card: ${eventCard.label} (${eventCard.vp} VP) → ${reality.toUpperCase()}!`,
+                payload: {
+                  eventCardId: eventId,
+                  eventVP: eventCard.vp,
+                  eventElement: eventCard.element ?? null,
+                  reality
+                }
+              })
+            );
+          } else {
+            claimCenterAndEvolve('DiscardCenter-replacement');
+            phase = resolvePostEncounterPhase();
+          }
+        } else {
+          phase = resolvePostEncounterPhase();
+        }
+      } else {
+        // Turn-setup / Board-refill resume (populate_event / populate_center / populate_parallel)
+        const stoppedByEvent = populateEventSlotFromDays('turn-refill');
+        if (!stoppedByEvent) {
+          if (centerAbandoned && boardCenter.length > 0) {
+            if (!populateParallelSlotFromDays('turn-refill')) {
+              phase =
+                state.ruleset.abandonedClaimPolicy === 'free_no_prep'
+                  ? 'AWAITING_ABANDONED_CHOICE'
+                  : preReadingElementalRequested &&
+                      hasAnyLegalElementalAction({
+                        player: players[activePlayerIndex]!,
+                        cards: state.cards,
+                        turn,
+                        ruleset: state.ruleset,
+                        daysCount: days.length,
+                        veilCount: veil.length,
+                        boardOccupiedCount:
+                          boardEvent.length + boardCenter.length + boardParallel.length
+                      })
+                    ? 'AWAITING_ELEMENTAL_ACTION'
+                    : 'AWAITING_ABANDONED_CHOICE';
+              currentReading = null;
+            }
+          } else if (boardCenter.length === 0 && days.length > 0) {
+            const canPrep =
+              preReadingElementalRequested &&
+              hasAnyLegalElementalAction({
+                player: players[activePlayerIndex]!,
+                cards: state.cards,
+                turn,
+                ruleset: state.ruleset,
+                daysCount: days.length,
+                veilCount: veil.length,
+                boardOccupiedCount: boardEvent.length + boardParallel.length + 1
+              });
+            if (!dealFreshConcealedCenterForReading('turn-refill', canPrep)) {
+              populateParallelSlotFromDays('turn-refill');
+            }
+          } else {
+            if (!populateParallelSlotFromDays('turn-refill')) {
+              const canPrep =
+                preReadingElementalRequested &&
+                hasAnyLegalElementalAction({
+                  player: players[activePlayerIndex]!,
+                  cards: state.cards,
+                  turn,
+                  ruleset: state.ruleset,
+                  daysCount: days.length,
+                  veilCount: veil.length,
+                  boardOccupiedCount:
+                    boardEvent.length + boardCenter.length + boardParallel.length
+                });
+              if (boardCenter.length > 0 && state.ruleset.features.readings && !canPrep) {
+                currentReading = createReadingForTurn(
+                  players,
+                  activePlayerIndex,
+                  state.cards[boardCenter[0]!]!,
+                  turn,
+                  round,
+                  state.ruleset
+                );
+                phase = 'AWAITING_READING';
+              } else if (boardCenter.length > 0 && canPrep) {
+                currentReading = null;
+                phase = 'AWAITING_ELEMENTAL_ACTION';
+              } else {
+                phase = 'READY_TO_END_TURN';
+              }
+            }
+          }
+        }
+      }
+      break;
+    }
+
+    case 'ProposeTrade': {
+      const tctx: TradingMutableContext = {
+        cards: state.cards,
+        ruleset: state.ruleset,
+        turn,
+        round,
+        phase,
+        players,
+        market,
+        newEvents,
+        nextSeq
+      };
+      const res = validateAndExecuteProposeTrade(tctx, command);
+      if (!res.ok) return fail(state, command, res.error);
+      market = tctx.market;
+      break;
+    }
+
+    case 'AcceptTrade': {
+      const tctx: TradingMutableContext = {
+        cards: state.cards,
+        ruleset: state.ruleset,
+        turn,
+        round,
+        phase,
+        players,
+        market,
+        newEvents,
+        nextSeq
+      };
+      const res = validateAndExecuteAcceptTrade(tctx, command);
+      if (!res.ok) return fail(state, command, res.error);
+      market = tctx.market;
+      break;
+    }
+
+    case 'RejectTrade': {
+      const tctx: TradingMutableContext = {
+        cards: state.cards,
+        ruleset: state.ruleset,
+        turn,
+        round,
+        phase,
+        players,
+        market,
+        newEvents,
+        nextSeq
+      };
+      const res = validateAndExecuteRejectTrade(tctx, command);
+      if (!res.ok) return fail(state, command, res.error);
+      market = tctx.market;
+      break;
+    }
+
+    case 'CloseMarket': {
+      if (state.phase !== 'AWAITING_MARKET' || !market) {
+        return fail(state, command, {
+          code: 'INVALID_PHASE',
+          message: 'Trading Market is not currently open.'
+        });
+      }
+      if (market.activeOffer) {
+        return fail(state, command, {
+          code: 'INVALID_TRADE_OFFER',
+          message: 'Accept or reject the pending trade offer before closing the Market.'
+        });
+      }
+
+      const closedInfo = market;
+      market = null;
+      newEvents.push(
+        makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
+          actor: command.playerId,
+          type: 'MarketClosed',
+          affectedCardIds: [],
+          source: 'CloseMarket',
+          reason: 'market-window-complete',
+          visibility: 'public',
+          summary: `Trading Market after Round ${closedInfo.openedAfterRound} closed (${closedInfo.completedTrades} trade${closedInfo.completedTrades === 1 ? '' : 's'} completed). Starting Round ${round}.`,
+          payload: {
+            openedAfterRound: closedInfo.openedAfterRound,
+            completedTrades: closedInfo.completedTrades
+          }
+        })
+      );
+
+      // Begin the scheduled new turn cleanly (awaken dormant Majors + Board Set FIRST -> Elemental Prep / Reading!)
+      if (state.ruleset.features.majors && majorPending.length > 0) {
+        const mctx = makeMajorBoardCtx();
+        activateReadyDormantMajors(mctx);
+        syncFromMajorBoardCtx(mctx);
+      }
+
+      const endedByEvent = populateEventSlotFromDays('turn-refill');
+      const preReadingRequested =
+        state.ruleset.features.elementalEffects &&
+        state.ruleset.elementalTiming === 'before_reading';
+      const canPrepNext = (): boolean =>
+        preReadingRequested &&
+        hasAnyLegalElementalAction({
+          player: players[activePlayerIndex]!,
+          cards: state.cards,
+          turn,
+          ruleset: state.ruleset,
+          daysCount: days.length,
+          veilCount: veil.length,
+          boardOccupiedCount: boardEvent.length + boardCenter.length + boardParallel.length + 1
+        });
+
+      if (!endedByEvent) {
+        if (players[activePlayerIndex]!.hand.length > state.ruleset.maxHandSize) {
+          // Ensure Board is set first, then enforce hand limit if trade grew hand past maxHandSize
+          if (boardCenter.length === 0 && days.length > 0) {
+            if (!dealFreshConcealedCenterForReading('turn-refill', true)) {
+              populateParallelSlotFromDays('turn-refill');
+            }
+          }
+          if (
+            (phase as GamePhase) !== 'GAME_OVER' &&
+            (phase as GamePhase) !== 'AWAITING_MAJOR_CONTENTION'
+          ) {
+            phase = 'AWAITING_HAND_DISCARD';
+          }
+        } else if (centerAbandoned && boardCenter.length > 0) {
+          if (!populateParallelSlotFromDays('turn-refill')) {
+            phase =
+              state.ruleset.abandonedClaimPolicy === 'free_no_prep'
+                ? 'AWAITING_ABANDONED_CHOICE'
+                : canPrepNext()
+                  ? 'AWAITING_ELEMENTAL_ACTION'
+                  : 'AWAITING_ABANDONED_CHOICE';
+            currentReading = null;
+          }
+        } else if (
+          boardCenter.length === 0 &&
+          !state.ruleset.emptyChamberMode &&
+          boardParallel.length > 0 &&
+          !isMajorCard(state.cards[boardParallel[0]!])
+        ) {
+          const slidId = boardParallel.shift()!;
+          const slidCard = state.cards[slidId]!;
+          boardCenter.push(slidId);
+          centerRevealed = !state.ruleset.features.readings;
+          const canPrep = canPrepNext();
+          if (!state.ruleset.features.readings) {
+            currentReading = null;
+            phase = 'AWAITING_CENTER_DECISION';
+          } else if (canPrep) {
+            currentReading = null;
+            phase = 'AWAITING_ELEMENTAL_ACTION';
+          } else {
+            currentReading = createReadingForTurn(
+              players,
+              activePlayerIndex,
+              slidCard,
+              turn,
+              round,
+              state.ruleset
+            );
+            phase = 'AWAITING_READING';
+          }
+          populateParallelSlotFromDays('turn-refill');
+        } else if (boardCenter.length === 0 && days.length > 0) {
+          const canPrep = canPrepNext();
+          if (!dealFreshConcealedCenterForReading('turn-refill', canPrep)) {
+            populateParallelSlotFromDays('turn-refill');
+          }
+        } else {
+          const postOutcome = evaluateCompletion(players, days, boardCenter, state.ruleset);
+          if (postOutcome) {
+            phase = 'GAME_OVER';
+            currentReading = null;
+            comboOutcome = postOutcome;
+            newEvents.push(
+              makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
+                actor: 'system',
+                type: 'GameCompleted',
+                affectedCardIds: [],
+                source: 'CloseMarket',
+                reason: postOutcome.reason,
+                visibility: 'public',
+                summary: postOutcome.summary,
+                payload: { ...postOutcome }
+              })
+            );
+          } else {
+            phase = 'READY_TO_END_TURN';
+          }
+        }
+      }
+
+      if (phase !== 'GAME_OVER' && phase !== 'AWAITING_MAJOR_CONTENTION') {
+        newEvents.push(
+          makeEvent(nextSeq(), turn, round, phase, state.ruleset.version, {
+            actor: activePlayerId,
+            type: 'TurnStarted',
+            affectedCardIds: [],
+            source: 'turn-cycle',
+            reason: 'turn-begin-after-market',
+            visibility: 'public',
+            summary: `Round ${round}, Turn ${turn} — ${players[activePlayerIndex]!.name}'s turn.`
+          })
+        );
+      }
+      break;
+    }
+
     default: {
       return fail(state, command, {
         code: 'FEATURE_DISABLED',
@@ -2297,6 +2871,8 @@ export function dispatch(state: GameState, command: Command): DispatchResult {
     currentReading,
     readingHistory,
     pendingEarthReorder,
+    pendingMajorContention,
+    market,
     majorPending,
     players,
     status: outcome ? 'completed' : 'playing',

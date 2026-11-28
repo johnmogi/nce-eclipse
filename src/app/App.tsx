@@ -29,11 +29,11 @@ import {
 } from '../sim/botController.js';
 import { runSimulationBatch, type BatchSimulationSummary } from '../sim/runner.js';
 import { DeckView } from './components/DeckView.js';
-import { GameTable } from './components/GameTable.js';
 import { InspectorDrawer } from './components/InspectorDrawer.js';
 import { RulesView, type RulesDraftState } from './components/RulesView.js';
 import { SavedGamesPanel } from './components/SavedGamesPanel.js';
 import { SimulationLabView } from './components/SimulationLabView.js';
+import { PlayTable } from './table/PlayTable.js';
 import {
   getElementalTargetContext,
   INITIAL_ELEMENTAL_SELECTION,
@@ -187,7 +187,14 @@ export function App() {
       if (cancelled) return;
       hydratedRef.current = true;
       const valid = all.filter((saved) => {
-        if (saved.ruleset.version !== '1.6.0') return false;
+        const expectedVersion = RULESET_PRESETS[saved.ruleset.id]?.version;
+        if (
+          expectedVersion &&
+          saved.ruleset.version !== expectedVersion &&
+          saved.ruleset.version !== '1.6.0'
+        ) {
+          return false;
+        }
         const rep = replay(saved.seed, saved.ruleset, saved.commands);
         return rep.ok;
       });
@@ -363,7 +370,8 @@ export function App() {
       centerCard: centerItem.card,
       sacrificeCardIds: validSacIds,
       cards: catalogSubset,
-      ruleset: view.ruleset
+      ruleset: view.ruleset,
+      activeCourtAuraVP: activePlayer.activeCourtAuraVP
     });
   }, [view, activePlayer, selectedSacrificeIds]);
 
@@ -894,7 +902,7 @@ export function App() {
 
       {tab === 'play' && (
         <div className={inspectorOpen ? 'stage-with-drawer' : 'stage-single'}>
-          <GameTable
+          <PlayTable
             view={view}
             viewer={viewer}
             controlMode={controlMode}
@@ -914,6 +922,7 @@ export function App() {
             daysBrowserOpen={daysBrowserOpen}
             veilTrayOpen={veilTrayOpen}
             onToggleDaysBrowser={() => setDaysBrowserOpen((open) => !open)}
+            onOpenDaysBrowser={() => setDaysBrowserOpen(true)}
             onToggleVeilTray={() => setVeilTrayOpen((open) => !open)}
             onReturnToLive={() => {
               setReplayPlaying(false);

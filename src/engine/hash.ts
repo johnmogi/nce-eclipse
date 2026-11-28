@@ -36,6 +36,8 @@ export function computeStateHash(state: Omit<GameState, 'stateHash'>): string {
     currentReading: state.currentReading,
     readingHistory: state.readingHistory,
     pendingEarthReorder: state.pendingEarthReorder ?? null,
+    pendingMajorContention: state.pendingMajorContention ?? null,
+    market: state.market ?? null,
     majorPending: state.majorPending,
     players: state.players.map((p) => ({
       id: p.id,
@@ -45,6 +47,7 @@ export function computeStateHash(state: Omit<GameState, 'stateHash'>): string {
       championCardId: p.championCardId ?? null,
       eclipseCount: p.eclipseCount,
       eclipseBonusVP: p.eclipseBonusVP,
+      eclipseTrophies: p.eclipseTrophies ?? [],
       effectUsedThisTurn: p.effectUsedThisTurn,
       elementalActionsUsedThisTurn: p.elementalActionsUsedThisTurn ?? (p.effectUsedThisTurn ? 1 : 0),
       pendingReaderBonuses: p.pendingReaderBonuses,

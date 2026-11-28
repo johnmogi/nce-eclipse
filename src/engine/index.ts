@@ -11,6 +11,8 @@ export * from './readings.js';
 export * from './setup.js';
 export * from './elemental-effects.js';
 export * from './majors.js';
+export * from './trading.js';
+export * from './actions.js';
 export * from './visibility.js';
 export * from './formatters.js';
 export * from './reducer.js';

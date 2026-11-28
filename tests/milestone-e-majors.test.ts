@@ -113,9 +113,9 @@ describe('Milestone E — 48-Card Classic Courts (Major Arcana), Eclipse, Triang
     expect(checkInvariants(s).ok).toBe(true);
   });
 
-  it('triggers Classic Triangulation when 3 non-eclipsing Major Courts occupy Parallel, Event, and Center', () => {
-    // Black King (Parallel) + Red Queen (Event) + Black Prince (Center) -> 3 Majors on Board -> TRIANGULATION!
-    const s = createGame(protoE, 'me-triangulation-win', {
+  it('resolves stacked non-eclipsing Major Courts via Parallel LIFO contention instead of accidental overflow Triangulation', () => {
+    // Black King (Parallel) + Red Queen (contends via LIFO -> Veil) + Black Prince (contends via LIFO -> Veil) -> NO accidental Turn-1 Triangulation!
+    const s = createGame(protoE, 'me-no-accidental-triangulation', {
       startingElements: ['air', 'water'],
       overrideHands: [['classic-earth-04'], ['classic-fire-05']],
       overrideDaysTop: [
@@ -123,14 +123,17 @@ describe('Milestone E — 48-Card Classic Courts (Major Arcana), Eclipse, Triang
         'classic-earth-queen',
         'classic-fire-prince',
         'classic-water-08',
-        'classic-fire-03'
+        'classic-fire-03',
+        'classic-earth-06'
       ]
     });
 
-    expect(s.status).toBe('completed');
-    expect(s.outcome?.reason).toBe('triangulation_victory');
-    expect(s.outcome?.winnerIds).toEqual(['p1']);
-    expect(s.events.some((e) => e.type === 'TriangulationCompleted')).toBe(true);
+    expect(s.status).toBe('playing');
+    expect(s.board.parallel).toEqual(['classic-air-king']);
+    expect(s.veil).toContain('classic-earth-queen');
+    expect(s.veil).toContain('classic-fire-prince');
+    expect(s.board.event).toEqual(['classic-water-08']);
+    expect(s.board.center).toEqual(['classic-fire-03']);
     expect(checkInvariants(s).ok).toBe(true);
   });
 

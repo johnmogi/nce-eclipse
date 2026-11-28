@@ -10,7 +10,7 @@ import { isEligibleEvolution } from './evolution.js';
 import {
   drawNextMinorRoutingMajors,
   isMajorCard,
-  placeDrawnMajorOnBoard,
+  resolveMajorArrival,
   type MajorMutableBoard
 } from './majors.js';
 import { createReadingForTurn } from './readings.js';
@@ -83,6 +83,7 @@ export function createGame(
       hand: [],
       eclipseCount: 0,
       eclipseBonusVP: 0,
+      eclipseTrophies: [],
       effectUsedThisTurn: false,
       elementalActionsUsedThisTurn: 0,
       pendingReaderBonuses: [],
@@ -279,7 +280,9 @@ export function createGame(
   if (ruleset.features.barriersAndTrials && majorBoardCtx.days.length > 0 && ruleset.boardOccupancyLimits.event >= 1) {
     let firstEventId: string | null = null;
     if (isFixtureOverride) {
-      const drawEv = drawNextMinorRoutingMajors(majorBoardCtx, 'event', 'turn-setup');
+      const drawEv = drawNextMinorRoutingMajors(majorBoardCtx, 'event', 'turn-setup', 'populate_event', {
+        allowContentionPause: false
+      });
       comboOutcome = drawEv.outcome;
       firstEventId = drawEv.minorCardId;
     } else {
@@ -322,7 +325,13 @@ export function createGame(
   if (!comboOutcome && majorBoardCtx.days.length > 0 && ruleset.boardOccupancyLimits.center >= 1) {
     let firstCenterId: string | null = null;
     if (isFixtureOverride) {
-      const drawCtr = drawNextMinorRoutingMajors(majorBoardCtx, 'center', 'turn-setup');
+      const drawCtr = drawNextMinorRoutingMajors(
+        majorBoardCtx,
+        'center',
+        'turn-setup',
+        'populate_center_reading',
+        { allowContentionPause: false }
+      );
       comboOutcome = drawCtr.outcome;
       firstCenterId = drawCtr.minorCardId;
     } else {
@@ -393,7 +402,10 @@ export function createGame(
     const rightId = majorBoardCtx.days.shift()!;
     const rightCard = catalog[rightId]!;
     if (ruleset.features.majors && isMajorCard(rightCard)) {
-      comboOutcome = placeDrawnMajorOnBoard(majorBoardCtx, rightId, 'turn-setup');
+      const arr = resolveMajorArrival(majorBoardCtx, rightId, 'turn-setup', 'populate_parallel', {
+        allowContentionPause: false
+      });
+      comboOutcome = arr.outcome;
     } else {
       majorBoardCtx.boardParallel.push(rightId);
       events.push(
@@ -538,6 +550,8 @@ export function createGame(
     currentReading,
     readingHistory: [],
     pendingEarthReorder: null,
+    pendingMajorContention: null,
+    market: null,
     majorPending: majorBoardCtx.majorPending,
     players,
     activeEffects: [],

@@ -4,7 +4,7 @@ export type RuleStatus = 'agreed' | 'provisional' | 'open';
 export type CardFamily = 'classic-number' | 'classic-court' | 'sun-major' | 'moon-major';
 export type CardTier = 'low' | 'med' | 'high' | 'court' | 'major';
 export type BackGroup = 'minor' | 'major' | 'sun-major' | 'moon-major';
-export type EventReality = 'treasure' | 'barrier' | 'trial';
+export type EventReality = 'treasure' | 'barrier' | 'trial' | 'major_resonance';
 
 export type Zone =
   | 'days'
@@ -24,6 +24,8 @@ export type ReaderBonusPolicy = 'record_only' | 'free_tier1_elemental_next_turn'
 export type ElementalTimingPolicy = 'after_encounter' | 'before_reading';
 export type ElementalActionsPerTurnPolicy = 1 | 2 | 3 | 'unlimited';
 export type AbandonedClaimPolicy = 'free_treasure_legacy' | 'free_no_prep';
+export type MajorDeparturePolicy = 'lifo' | 'fifo';
+export type EclipseCardDisposition = 'both_to_veil' | 'keep_one_beside_ace' | 'keep_pair_beside_ace';
 
 export type EvolutionColorPolicy = 'same-color' | 'same-element' | 'any';
 export type EvolutionTieBreakPolicy =
@@ -40,6 +42,8 @@ export type GamePhase =
   | 'AWAITING_HAND_DISCARD'
   | 'AWAITING_ELEMENTAL_ACTION'
   | 'AWAITING_EARTH_REORDER'
+  | 'AWAITING_MAJOR_CONTENTION'
+  | 'AWAITING_MARKET'
   | 'READY_TO_END_TURN'
   | 'GAME_OVER';
 
@@ -122,6 +126,9 @@ export interface Ruleset {
   readonly declinedAbandonedPolicy: 'send_to_veil'; // Explicit disposition when next player declines abandoned card
   readonly marketFrequencyRounds: number;
   readonly eclipseVictoryCount: number | 'players-plus-one';
+  readonly majorContentionEnabled?: boolean; // Classic MVP R2: dedicated Parallel + contention/LIFO + Rank 7-9 choice (no auto-overflow)
+  readonly majorDefaultDeparture?: MajorDeparturePolicy; // Default 'lifo' (arriving exits; incumbent stays)
+  readonly eclipseCardDisposition?: EclipseCardDisposition; // Default 'both_to_veil' + persistent trophy beside Ace
   readonly l11TargetRank: number; // 0 = play until Days exhausted
   readonly stopOnTargetRank: boolean;
   readonly boardOccupancyLimits: BoardOccupancyLimits;
@@ -149,6 +156,17 @@ export interface PendingReaderBonus {
   readonly expiredOnTurn?: number;
 }
 
+export interface EclipseTrophy {
+  readonly id: string;
+  readonly rank: number;
+  readonly label: string;
+  readonly shortLabel: string;
+  readonly bonusVP: 1 | 2 | 3;
+  readonly cardIds: readonly [string, string];
+  readonly keptCardIds: readonly string[]; // Empty when 'both_to_veil'; 1 or 2 cardIds when physical Court(s) stay beside Ace
+  readonly earnedOnTurn: number;
+}
+
 export interface PlayerState {
   readonly id: string;
   readonly name: string;
@@ -158,6 +176,7 @@ export interface PlayerState {
   readonly championCardId?: string;
   readonly eclipseCount: number;
   readonly eclipseBonusVP: number; // Persistent Court/Champion VP bonus from completed Eclipses
+  readonly eclipseTrophies?: readonly EclipseTrophy[];
   readonly effectUsedThisTurn: boolean;
   readonly elementalActionsUsedThisTurn?: number;
   readonly secondaryElement?: Element; // Reserved, inactive in D1
@@ -206,6 +225,9 @@ export interface ReconciliationBreakdown {
   readonly sacrificedVP: number;
   readonly hasElementalAdvantage: boolean;
   readonly advantageModifierVP: number;
+  readonly cappedBaseVP?: number;
+  readonly activeCourtAuraVP?: number;
+  readonly persistentEclipseBonusVP?: number;
   readonly rawTotalVP: number;
   readonly effectiveVP: number;
   readonly wasCapped: boolean;
@@ -218,6 +240,98 @@ export interface ReconciliationBreakdown {
 export interface MajorPendingEntry {
   readonly cardId: string;
   readonly dormantUntilTurn: number;
+}
+
+export type MajorContentionResumeContext =
+  | 'populate_event'
+  | 'populate_center_reading'
+  | 'populate_center_pre_elemental'
+  | 'populate_parallel'
+  | 'discard_replacement'
+  | 'revealed_event_replacement';
+
+export interface PendingMajorContentionState {
+  readonly playerId: string;
+  readonly incumbentCardId: string;
+  readonly arrivingCardId: string;
+  readonly source: string;
+  readonly resumeContext: MajorContentionResumeContext;
+  readonly deferReadingForPreElemental?: boolean;
+}
+
+export interface ProjectedMajorContentionView {
+  readonly playerId: string;
+  readonly incumbentCard: Card;
+  readonly arrivingCard: Card;
+  readonly incumbentDormant: boolean;
+  readonly reason: string;
+}
+
+export interface MarketOffer {
+  readonly id: string;
+  readonly proposerId: string;
+  readonly targetPlayerId: string;
+  readonly offerCardIds: readonly string[];
+  readonly requestCardIds: readonly string[];
+  readonly requestedCount: number; // 0 = 1-way gift; >=1 with empty requestCardIds = privacy-safe counter-card trade!
+  readonly status: 'pending' | 'accepted' | 'rejected' | 'withdrawn';
+  readonly createdOnTurn: number;
+}
+
+export interface MarketState {
+  readonly openedAfterRound: number;
+  readonly activeOffer: MarketOffer | null;
+  readonly offersMadeByPlayer: Readonly<Record<string, number>>;
+  readonly maxOffersPerPlayer: number;
+  readonly completedTrades: number;
+  readonly passedPlayerIds: readonly string[];
+}
+
+export interface ProjectedMarketOfferView {
+  readonly id: string;
+  readonly proposerId: string;
+  readonly proposerName: string;
+  readonly targetPlayerId: string;
+  readonly targetPlayerName: string;
+  readonly offerCards: readonly Card[];
+  readonly requestCards: readonly Card[];
+  readonly requestedCount: number;
+  readonly status: MarketOffer['status'];
+}
+
+export interface ProjectedMarketView {
+  readonly openedAfterRound: number;
+  readonly activeOffer: ProjectedMarketOfferView | null;
+  readonly offersMadeByPlayer: Readonly<Record<string, number>>;
+  readonly maxOffersPerPlayer: number;
+  readonly completedTrades: number;
+  readonly passedPlayerIds: readonly string[];
+}
+
+export type ActionDescriptorCategory =
+  | 'ordinary_elemental'
+  | 'reader_bonus'
+  | 'reading'
+  | 'reconciliation'
+  | 'abandoned'
+  | 'major_contention'
+  | 'market'
+  | 'hand_discard'
+  | 'turn';
+
+export interface LegalActionDescriptor {
+  readonly id: string;
+  readonly commandType: Command['type'];
+  readonly category: ActionDescriptorCategory;
+  readonly label: string;
+  readonly sourceLabel: string;
+  readonly effectSummary: string;
+  readonly costLabel: string;
+  readonly strength?: number;
+  readonly allowedTargets: readonly string[];
+  readonly enabled: boolean;
+  readonly disabledReason?: string;
+  readonly expiryWarning?: string;
 }
 
 export interface ActiveEffectEntry {
@@ -262,8 +376,15 @@ export type GameEventType =
   | 'EarthPeekStarted'
   | 'MajorArrived'
   | 'MajorActivated'
+  | 'MajorContentionPaused'
+  | 'MajorContentionResolved'
   | 'EclipseFormed'
   | 'TriangulationCompleted'
+  | 'MarketOpened'
+  | 'TradeProposed'
+  | 'TradeAccepted'
+  | 'TradeRejected'
+  | 'MarketClosed'
   | 'CenterClaimed'
   | 'LineageEvolved'
   | 'EvolutionChainCompleted'
@@ -314,6 +435,10 @@ export interface ValidationError {
     | 'INVALID_REORDER_SPEC'
     | 'NO_AVAILABLE_READER_BONUS'
     | 'READER_BONUS_NOT_READY'
+    | 'COURT_CANNOT_OCCUPY_CENTER_WITHOUT_COMBO'
+    | 'INVALID_MAJOR_CONTENTION_CHOICE'
+    | 'INVALID_TRADE_OFFER'
+    | 'MARKET_OFFER_LIMIT_REACHED'
     | 'FEATURE_DISABLED'
     | 'INVARIANT_VIOLATION';
   readonly message: string;
@@ -373,10 +498,25 @@ export type Command =
       readonly newOrder?: readonly string[];
       readonly moveTopToBottom?: boolean;
     }
-  // Reserved future commands (validated cleanly as FEATURE_DISABLED until their milestone)
-  | { readonly type: 'ProposeTrade'; readonly playerId: string; readonly targetPlayerId: string }
-  | { readonly type: 'AcceptTrade'; readonly playerId: string; readonly offerId: string }
+  // Classic MVP R2/R3 commands (Trading Market & Rank 7-9 Major Contention)
+  | {
+      readonly type: 'ProposeTrade';
+      readonly playerId: string;
+      readonly targetPlayerId: string;
+      readonly offerCardIds?: readonly string[];
+      readonly requestCardIds?: readonly string[];
+      readonly requestedCount?: number;
+    }
+  | {
+      readonly type: 'AcceptTrade';
+      readonly playerId: string;
+      readonly offerId: string;
+      readonly counterCardIds?: readonly string[];
+    }
+  | { readonly type: 'RejectTrade'; readonly playerId: string; readonly offerId: string }
+  | { readonly type: 'CloseMarket'; readonly playerId: string }
   | { readonly type: 'ChooseMajorExit'; readonly playerId: string; readonly cardId: string }
+  // Reserved R5 future command
   | { readonly type: 'ResolveEntropy'; readonly playerId: string };
 
 export interface CommandRecord {
@@ -446,6 +586,8 @@ export interface GameState {
   readonly currentReading: ReadingRecord | null;
   readonly readingHistory: readonly ReadingRecord[];
   readonly pendingEarthReorder?: PendingEarthReorderState | null;
+  readonly pendingMajorContention?: PendingMajorContentionState | null;
+  readonly market?: MarketState | null;
   readonly majorPending: readonly MajorPendingEntry[];
   readonly players: readonly PlayerState[];
   readonly activeEffects: readonly ActiveEffectEntry[];
@@ -514,6 +656,8 @@ export interface ProjectedPlayerView {
   readonly hand: readonly Card[] | null;
   readonly eclipseCount: number;
   readonly eclipseBonusVP: number;
+  readonly eclipseTrophies: readonly EclipseTrophy[];
+  readonly activeCourtAuraVP: number;
   readonly effectUsedThisTurn: boolean;
   readonly elementalActionsUsedThisTurn: number;
   readonly pendingReaderBonusCount: number;
@@ -590,6 +734,9 @@ export interface ProjectedGameView {
   readonly currentReading: ProjectedReadingView | null;
   readonly readingHistory: readonly ReadingRecord[];
   readonly pendingEarthReorder: ProjectedEarthReorderView | null;
+  readonly pendingMajorContention: ProjectedMajorContentionView | null;
+  readonly market: ProjectedMarketView | null;
+  readonly dormantMajorCardIds: readonly string[];
   readonly board: {
     readonly event: readonly ProjectedBoardSlotItem[];
     readonly center: readonly ProjectedBoardSlotItem[];
@@ -598,6 +745,7 @@ export interface ProjectedGameView {
   readonly players: readonly ProjectedPlayerView[];
   readonly deckComponents: readonly DeckComponentStatus[];
   readonly legalActions: readonly Command['type'][];
+  readonly actionDescriptors: readonly LegalActionDescriptor[];
   readonly events: readonly GameEvent[];
   readonly commandCount: number;
 }

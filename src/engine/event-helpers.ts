@@ -100,13 +100,24 @@ export function evaluateCompletion(
   }
 
   if (days.length === 0 && center.length === 0) {
+    // RD-11 Winner-of-the-Day deterministic tie-break:
+    // (1) Highest eclipseCount -> (2) Highest lineage.rank -> (3) Highest evolutionsCompleted -> (4) Shared draw
+    const maxEclipses = Math.max(...players.map((p) => p.eclipseCount));
+    const eclipseLeaders = players.filter((p) => p.eclipseCount === maxEclipses);
+    const maxRankAmong = Math.max(...eclipseLeaders.map((p) => p.lineage.rank));
+    const rankLeaders = eclipseLeaders.filter((p) => p.lineage.rank === maxRankAmong);
+    const maxEvosAmong = Math.max(...rankLeaders.map((p) => p.evolutionsCompleted));
+    const winners = rankLeaders.filter((p) => p.evolutionsCompleted === maxEvosAmong).map((p) => p.id);
     const highestRank = Math.max(...players.map((p) => p.lineage.rank));
-    const winners = players.filter((p) => p.lineage.rank === highestRank).map((p) => p.id);
+    const tieLabel =
+      maxEclipses > 0
+        ? `${maxEclipses} Eclipse${maxEclipses === 1 ? '' : 's'}, Rank ${maxRankAmong}`
+        : `Rank ${maxRankAmong}`;
     return {
       reason: 'days_exhausted',
       winnerIds: winners,
       highestRank,
-      summary: `Deck of Days exhausted. Winner of the day (Rank ${highestRank}): ${winners.join(', ')}.`
+      summary: `Deck of Days exhausted. Winner of the Day (${tieLabel}): ${winners.join(', ')}.`
     };
   }
 

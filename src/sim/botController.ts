@@ -278,6 +278,129 @@ export function chooseFairBotCommand(
     };
   }
 
+  // 1b. Rank 7–9 Major Contention choice (strictly from public Board/Veil & bot lineage!)
+  if (view.phase === 'AWAITING_MAJOR_CONTENTION' && view.pendingMajorContention) {
+    if (view.pendingMajorContention.playerId !== botPlayerId) return null;
+    const { incumbentCard, arrivingCard } = view.pendingMajorContention;
+    const scoreCourt = (c: Card): number => {
+      let s = (c.courtBonus ?? 1) * 2;
+      if (c.element === bot.lineage.element) s += 8;
+      // Prefer keeping a Court whose opposite-color match is NOT already buried in the Veil
+      const matchInVeil = view.veil.some(
+        (v) => v.family === 'classic-court' && v.rank === c.rank && v.color !== c.color
+      );
+      if (!matchInVeil) s += 3;
+      return s;
+    };
+    const keepArriving = scoreCourt(arrivingCard) > scoreCourt(incumbentCard);
+    return {
+      type: 'ChooseMajorExit',
+      playerId: botPlayerId,
+      cardId: keepArriving ? incumbentCard.id : arrivingCard.id
+    };
+  }
+
+  // 1c. Trading Market negotiation (strictly from bot's private hand + public lineages + offered cards!)
+  if (view.phase === 'AWAITING_MARKET' && view.market) {
+    const market = view.market;
+    const botHand = bot.hand ?? [];
+    const scoreCardForBot = (c: Card): number => {
+      const evolvesNow = isEligibleEvolution(
+        {
+          rank: bot.lineage.rank,
+          element: bot.lineage.element,
+          color: bot.lineage.color,
+          cardIds: bot.lineage.cardIds
+        },
+        c,
+        view.ruleset
+      );
+      if (evolvesNow) return 12 + c.vp;
+      if (cardMatchesFutureLineage(bot, c, view.ruleset)) return 5 + c.vp;
+      return c.vp;
+    };
+
+    if (market.activeOffer) {
+      const offer = market.activeOffer;
+      if (offer.targetPlayerId !== botPlayerId) return null;
+
+      // Always accept 1-way gifts cleanly!
+      if (offer.requestedCount === 0) {
+        return { type: 'AcceptTrade', playerId: botPlayerId, offerId: offer.id };
+      }
+
+      const incomingValue = offer.offerCards.reduce((sum, c) => sum + scoreCardForBot(c), 0);
+      const anyImmediateEvo = offer.offerCards.some((c) =>
+        isEligibleEvolution(
+          {
+            rank: bot.lineage.rank,
+            element: bot.lineage.element,
+            color: bot.lineage.color,
+            cardIds: bot.lineage.cardIds
+          },
+          c,
+          view.ruleset
+        )
+      );
+
+      // Explicit requestCardIds (Hotseat / fixture trade)
+      if (offer.requestCards.length > 0) {
+        const outgoingValue = offer.requestCards.reduce((sum, c) => sum + scoreCardForBot(c), 0);
+        if (incomingValue >= outgoingValue || (anyImmediateEvo && incomingValue >= outgoingValue - 1)) {
+          return { type: 'AcceptTrade', playerId: botPlayerId, offerId: offer.id };
+        }
+        return { type: 'RejectTrade', playerId: botPlayerId, offerId: offer.id };
+      }
+
+      // Privacy-safe blind counter-card selection: pick bot's cheapest card(s) to give back!
+      if (botHand.length < offer.requestedCount) {
+        return { type: 'RejectTrade', playerId: botPlayerId, offerId: offer.id };
+      }
+      const sortedGive = [...botHand].sort((a, b) => scoreCardForBot(a) - scoreCardForBot(b) || a.id.localeCompare(b.id));
+      const chosenGive = sortedGive.slice(0, offer.requestedCount);
+      const outgoingValue = chosenGive.reduce((sum, c) => sum + scoreCardForBot(c), 0);
+      if (incomingValue >= outgoingValue || (anyImmediateEvo && incomingValue >= outgoingValue - 1)) {
+        return {
+          type: 'AcceptTrade',
+          playerId: botPlayerId,
+          offerId: offer.id,
+          counterCardIds: chosenGive.map((c) => c.id)
+        };
+      }
+      return { type: 'RejectTrade', playerId: botPlayerId, offerId: offer.id };
+    }
+
+    // No active offer -> propose a mutually useful off-color trade if within offer limit, else close Market!
+    const opponent = view.players.find((p) => p.id !== botPlayerId);
+    const made = market.offersMadeByPlayer[botPlayerId] ?? 0;
+    if (
+      opponent &&
+      opponent.handCount > 0 &&
+      botHand.length > 0 &&
+      made < market.maxOffersPerPlayer &&
+      market.completedTrades === 0
+    ) {
+      // Offer an off-color card from bot's hand that matches opponent's public lineage color!
+      const tradeCandidate = botHand.find(
+        (c) =>
+          !cardMatchesFutureLineage(bot, c, view.ruleset) &&
+          c.color === opponent.lineage.color &&
+          c.rank > opponent.lineage.rank
+      );
+      if (tradeCandidate) {
+        return {
+          type: 'ProposeTrade',
+          playerId: botPlayerId,
+          targetPlayerId: opponent.id,
+          offerCardIds: [tradeCandidate.id],
+          requestedCount: 1
+        };
+      }
+    }
+
+    return { type: 'CloseMarket', playerId: botPlayerId };
+  }
+
   // All remaining phases require bot to be the active player
   if (view.activePlayerId !== botPlayerId) return null;
 
@@ -339,7 +462,7 @@ export function chooseFairBotCommand(
       return { type: 'EndTurn', playerId: botPlayerId };
     }
     const reality = eventCardToReality(evSlot.card);
-    if (reality === 'treasure') {
+    if (reality === 'treasure' || reality === 'major_resonance') {
       return { type: 'ResolveEvent', playerId: botPlayerId, sacrificeCardIds: [] };
     }
     const sac = findCheapestLegalSacrificeFromView(view, bot, evSlot.card, centerSlot.card);
@@ -490,6 +613,23 @@ export function getAutomatedActorId(
   if (state.status !== 'playing' || state.phase === 'GAME_OVER') return null;
 
   if (config.mode === 'hotseat') {
+    return null;
+  }
+
+  if (state.phase === 'AWAITING_MAJOR_CONTENTION' && state.pendingMajorContention) {
+    const chooser = state.pendingMajorContention.playerId;
+    if (config.mode === 'auto-sim') return chooser;
+    return chooser !== config.humanPlayerId ? chooser : null;
+  }
+
+  if (state.phase === 'AWAITING_MARKET' && state.market) {
+    if (state.market.activeOffer) {
+      const responder = state.market.activeOffer.targetPlayerId;
+      if (config.mode === 'auto-sim') return responder;
+      return responder !== config.humanPlayerId ? responder : null;
+    }
+    if (config.mode === 'auto-sim') return state.activePlayerId;
+    // In human-vs-bot, Market stays open for Human to propose trades or close Market cleanly!
     return null;
   }
 

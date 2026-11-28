@@ -1616,3 +1616,369 @@ select {
 .saved-game-current {
   border-color: var(--accent);
 }
+
+/* ============================================================================
+ * Classic MVP Re-Scaffold UI: Eclipse Spotlight, Trophies, Contention, Market
+ * ============================================================================ */
+
+.eclipse-trophies-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.eclipse-trophy-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #fde68a;
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.25), rgba(217, 119, 6, 0.14));
+  border: 1px solid rgba(251, 191, 36, 0.55);
+  box-shadow: 0 0 10px rgba(245, 158, 11, 0.22);
+}
+
+.eclipse-spotlight-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgba(6, 10, 14, 0.78);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.eclipse-spotlight-card {
+  width: min(560px, 100%);
+  background: radial-gradient(circle at top, rgba(245, 158, 11, 0.14), rgba(14, 21, 28, 0.97) 65%);
+  border: 1px solid rgba(251, 191, 36, 0.5);
+  border-radius: 16px;
+  padding: 24px 28px;
+  text-align: center;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.65);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+
+.eclipse-spotlight-eyebrow {
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.eclipse-cards-pair {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+}
+
+.eclipse-court-column {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.eclipse-court-tile {
+  width: 110px;
+  min-height: 132px;
+  border-radius: 12px;
+  border: 1.5px solid rgba(148, 163, 184, 0.45);
+  background: rgba(30, 41, 59, 0.85);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px;
+}
+
+.eclipse-court-tile.color-red {
+  background: rgba(127, 29, 29, 0.45);
+  border-color: rgba(248, 113, 113, 0.55);
+}
+
+.eclipse-court-tile.color-black {
+  background: rgba(30, 58, 138, 0.35);
+  border-color: rgba(147, 197, 253, 0.5);
+}
+
+.eclipse-court-short {
+  font-size: 28px;
+  font-weight: 800;
+}
+
+.eclipse-court-name {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.eclipse-court-role {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.eclipse-plus {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.eclipse-banner-title {
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  color: #fde68a;
+}
+
+.eclipse-metrics-row {
+  display: flex;
+  gap: 36px;
+  justify-content: center;
+}
+
+.eclipse-metric-value {
+  font-size: 22px;
+  font-weight: 800;
+}
+
+.eclipse-metric-label {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.eclipse-spotlight-note {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+  max-width: 440px;
+}
+
+.contention-panel,
+.market-panel,
+.endgame-summary-box {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.contention-choices-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 14px;
+}
+
+.contention-choice-card {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px;
+  background: rgba(15, 23, 32, 0.55);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  text-align: center;
+}
+
+.market-offer-box,
+.market-compose-box {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+  background: rgba(15, 23, 32, 0.45);
+}
+
+.market-offer-summary {
+  font-size: 14px;
+}
+
+.table-recent-beat {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--muted);
+  background: rgba(15, 23, 32, 0.45);
+  border: 1px solid rgba(148, 163, 184, 0.16);
+}
+
+.zone-inline-browse-btn {
+  margin-top: 6px;
+}
+
+.elemental-confirm-strip {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(16, 185, 129, 0.08);
+  border: 1px solid rgba(16, 185, 129, 0.35);
+}
+
+.endgame-players-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 10px;
+}
+
+.endgame-player-stat {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+}
+
+.endgame-player-stat.endgame-winner {
+  border-color: rgba(251, 191, 36, 0.65);
+  background: rgba(245, 158, 11, 0.1);
+}
+
+/* ========================================================================= */
+/* CLASSIC MVP RE-SCAFFOLD — HORIZONTAL CARD-GAME TABLETOP LAYOUT            */
+/* ========================================================================= */
+
+.players-strip {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+@media (max-width: 820px) {
+  .players-strip {
+    grid-template-columns: 1fr;
+  }
+}
+
+.player-identity-card {
+  border: 1.5px solid var(--border);
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.player-identity-card.player-card-active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 42%, transparent);
+}
+
+.player-identity-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.player-identity-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  letter-spacing: 0.04em;
+}
+
+.player-identity-body {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.identity-progression {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.identity-current-box {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 5px 9px;
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.identity-current-box.color-black {
+  background: var(--black-card);
+  border-color: var(--black-border);
+}
+
+.identity-current-box.color-red {
+  background: var(--red-card);
+  border-color: var(--red-border);
+}
+
+.identity-current-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.identity-glyph {
+  font-size: 16px;
+  font-weight: 800;
+  line-height: 1.1;
+}
+
+.identity-caption {
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
+.player-identity-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.table-zones-row {
+  display: grid;
+  grid-template-columns: minmax(175px, 1fr) minmax(300px, 1.8fr) minmax(175px, 1fr);
+  gap: 12px;
+  align-items: stretch;
+}
+
+@media (max-width: 860px) {
+  .table-zones-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+.board-three-slots {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(78px, 1fr));
+  gap: 8px;
+  width: 100%;
+  align-items: stretch;
+}
+
+.decision-panel {
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface-2));
+}

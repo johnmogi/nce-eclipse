@@ -13,19 +13,19 @@ test.describe('Stage R1 — Real Browser Acceptance Walkthrough (Human vs Bot)',
     ensureShotDir();
   });
 
-  test('Walkthrough A (e2e-seed-5): 3/3 fresh start, empty Veil, optional pre-reading Elemental Action, autonomous Bot Reading, Treasure claim, Turn 2 Bot completion, and Turn 3 Reader Bonus activation', async ({
+  test('Walkthrough A (v2-e2e-11): 3/3 fresh start, empty Veil, optional pre-reading Elemental Action, autonomous Bot Reading, Treasure claim, Turn 2 Bot completion, and Turn 3 Reader Bonus activation', async ({
     page
   }) => {
     await page.goto('/');
 
     // 1. Verify default fresh Turn 1 starts with 3/3 cards & empty Veil
-    await expect(page.getByText('NEXUS ECLIPSE')).toBeVisible();
+    await expect(page.getByText('NEXUS ECLIPSE', { exact: true })).toBeVisible();
     await expect(page.getByTestId('veil-zone')).toContainText('0 cards');
     await expect(page.getByText('Your hand (3/5)')).toBeVisible();
 
-    // Load deterministic seed e2e-seed-5 (Event 7♦ Treasure, P1 hand 2♥/5♠/8♠, clean Turns 1-3 with Reader Bonus)
+    // Load deterministic v2.0.0 seed v2-e2e-11 (Event 9♦ Treasure, P1 hand 6♥/4♠/8♦, clean Turns 1-3 with Reader Bonus)
     const seedInput = page.locator('input[placeholder="custom seed"]');
-    await seedInput.fill('e2e-seed-5');
+    await seedInput.fill('v2-e2e-11');
     await page.getByRole('button', { name: 'New Game' }).click();
 
     await expect(page.getByText('Round 1 · Turn 1')).toBeVisible();
@@ -41,8 +41,8 @@ test.describe('Stage R1 — Real Browser Acceptance Walkthrough (Human vs Bot)',
     await page.screenshot({ path: path.join(SHOT_DIR, '01-turn1-fresh-immediate-future.png'), fullPage: true });
     await page.getByRole('button', { name: 'Close Browser' }).click();
 
-    // 2. Optional Pre-Reading Elemental Action: activate 5♠ (Air) on Deck of Days -> shuffle -> auto-advances to Reading!
-    await page.locator('.hand-cards-grid .card-chip', { hasText: '5♠' }).click();
+    // 2. Optional Pre-Reading Elemental Action: activate 4♠ (Air) on Deck of Days -> shuffle -> auto-advances to Reading!
+    await page.locator('.hand-cards-grid .card-chip', { hasText: '4♠' }).click();
     await page.getByTestId('deck-of-days-zone').click();
     const confirmAirBtn = page.getByRole('button', { name: /Confirm: Shuffle/i });
     await expect(confirmAirBtn).toBeEnabled();
@@ -100,13 +100,13 @@ test.describe('Stage R1 — Real Browser Acceptance Walkthrough (Human vs Bot)',
     await expect(page.getByText('Round 2 · Turn 3')).toBeVisible();
   });
 
-  test('Walkthrough B (e2e-seed-7): Reject-and-Replace draws fresh card + flips Left Event into Zero-Cost Trial ("Cleared by Your Lineage")', async ({
+  test('Walkthrough B (v2-e2e-2): Reject-and-Replace draws fresh card + flips Left Event into Zero-Cost Trial ("Cleared by Your Lineage")', async ({
     page
   }) => {
     await page.goto('/');
 
     const seedInput = page.locator('input[placeholder="custom seed"]');
-    await seedInput.fill('e2e-seed-7');
+    await seedInput.fill('v2-e2e-2');
     await page.getByRole('button', { name: 'New Game' }).click();
 
     await expect(page.getByText('Round 1 · Turn 1')).toBeVisible();
@@ -135,12 +135,12 @@ test.describe('Stage R1 — Real Browser Acceptance Walkthrough (Human vs Bot)',
   }) => {
     await page.goto('/');
 
-    // Start deterministic eclipse-me-001 and verify initial hand (4♣, 2♦, 3♥)
+    // Start deterministic eclipse-me-001 (v2.0.0) and verify initial hand (8♦, 8♣, 2♦)
     const seedInput = page.locator('input[placeholder="custom seed"]');
     await expect(seedInput).toHaveValue('eclipse-me-001');
-    await expect(page.locator('.hand-cards-grid')).toContainText('4♣');
+    await expect(page.locator('.hand-cards-grid')).toContainText('8♦');
+    await expect(page.locator('.hand-cards-grid')).toContainText('8♣');
     await expect(page.locator('.hand-cards-grid')).toContainText('2♦');
-    await expect(page.locator('.hand-cards-grid')).toContainText('3♥');
     await expect(page.getByTestId('veil-zone')).toContainText('0 cards');
 
     // Play 1 step (Proceed to Reading -> Bot advises) and click explicit Save
@@ -175,13 +175,13 @@ test.describe('Stage R1 — Real Browser Acceptance Walkthrough (Human vs Bot)',
     await expect(seedInput).toHaveValue('eclipse-me-001');
     await expect(page.getByTestId('accept-center-btn')).toBeVisible();
 
-    // Click ↺ Replay Seed -> reproduces exact identical Turn 1 initial state (4♣, 2♦, 3♥, Veil 0)!
+    // Click ↺ Replay Seed -> reproduces exact identical Turn 1 initial state (8♦, 8♣, 2♦, Veil 0)!
     await page.getByTestId('replay-seed-btn').click();
     await expect(seedInput).toHaveValue('eclipse-me-001');
     await expect(page.getByTestId('proceed-to-reading-btn')).toBeVisible();
-    await expect(page.locator('.hand-cards-grid')).toContainText('4♣');
+    await expect(page.locator('.hand-cards-grid')).toContainText('8♦');
+    await expect(page.locator('.hand-cards-grid')).toContainText('8♣');
     await expect(page.locator('.hand-cards-grid')).toContainText('2♦');
-    await expect(page.locator('.hand-cards-grid')).toContainText('3♥');
     await expect(page.getByTestId('veil-zone')).toContainText('0 cards');
   });
 
@@ -190,9 +190,9 @@ test.describe('Stage R1 — Real Browser Acceptance Walkthrough (Human vs Bot)',
   }) => {
     await page.goto('/');
 
+    // Default seed eclipse-me-001 (v2.0.0) starts with 8♦ (Earth 3 VP) and Minor Board/Days
     const seedInput = page.locator('input[placeholder="custom seed"]');
-    await seedInput.fill('e2e-seed-7');
-    await page.getByRole('button', { name: 'New Game' }).click();
+    await expect(seedInput).toHaveValue('eclipse-me-001');
 
     // 1. Verify Board Set comes FIRST, then 1. Elemental Prep is active
     const stepper = page.locator('.turn-stepper');
@@ -237,12 +237,12 @@ test.describe('Stage R1 — Real Browser Acceptance Walkthrough (Human vs Bot)',
   }) => {
     await page.goto('/');
 
-    // Default seed eclipse-me-001: P1 holds 4♣, 2♦, 3♥; Turn 1 Center = 9♣, Event = 2♠ (Trial)
+    // Default seed eclipse-me-001 (v2.0.0): P1 holds 8♦, 8♣, 2♦; Turn 1 Center = 8♥, Event = 6♠ (Barrier), Days #1 = 4♥
     await expect(page.locator('input[placeholder="custom seed"]')).toHaveValue('eclipse-me-001');
     await page.getByTestId('proceed-to-reading-btn').click();
     await expect(page.getByTestId('accept-center-btn')).toBeVisible({ timeout: 10_000 });
 
-    // Pursue -> Center (9♣) + Left Event (2♠ Trial) flip face-up!
+    // Pursue -> Center (8♥) + Left Event (6♠ Barrier) flip face-up!
     await page.getByTestId('accept-center-btn').click();
     await expect(page.getByTestId('revealed-hand-mode-bar')).toBeVisible();
     await expect(page.getByTestId('hand-mode-badge')).toContainText('SACRIFICE MODE');
@@ -251,8 +251,8 @@ test.describe('Stage R1 — Real Browser Acceptance Walkthrough (Human vs Bot)',
     await page.getByTestId('mode-elemental-btn').click();
     await expect(page.getByTestId('hand-mode-badge')).toContainText('ELEMENTAL MODE');
 
-    // Activate 4♣ (Fire) on revealed Left Event (2♠) -> burns 2♠ and flips a real replacement Event!
-    await page.locator('.hand-cards-grid .card-chip', { hasText: '4♣' }).click();
+    // Activate 8♣ (Fire) on revealed Left Event (6♠) -> burns 6♠ and flips a real replacement Event (4♥)!
+    await page.locator('.hand-cards-grid .card-chip', { hasText: '8♣' }).click();
     await page.locator('.board-slot-card', { hasText: 'Event' }).click();
     const confirmFire = page.getByTestId('confirm-revealed-elemental-btn');
     await expect(confirmFire).toBeEnabled();

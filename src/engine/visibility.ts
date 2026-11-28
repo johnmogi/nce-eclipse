@@ -1,3 +1,4 @@
+import { buildActionDescriptors } from './actions.js';
 import {
   canActivateHandElementalInPhase,
   canSpendReaderBonusInPhase,
@@ -5,7 +6,7 @@ import {
   getElementalActionsUsedCount,
   hasRemainingHandElementalAction
 } from './elemental-effects.js';
-import { isMajorCard } from './majors.js';
+import { getActiveCourtAuraVP, isMajorCard, isMajorDormant } from './majors.js';
 import { eventCardToReality } from './reconciliation.js';
 import type {
   Card,
@@ -17,6 +18,8 @@ import type {
   ProjectedBoardSlotItem,
   ProjectedEarthReorderView,
   ProjectedGameView,
+  ProjectedMajorContentionView,
+  ProjectedMarketView,
   ProjectedOrderedZoneItem,
   ProjectedPlayerView,
   ProjectedReadingView,
@@ -40,6 +43,25 @@ export function getLegalActionsForState(state: GameState, viewer: Viewer): Comma
     if (!state.currentReading) return [];
     if (viewer.role === 'admin' || viewer.playerId === state.currentReading.readerId) {
       return ['GiveReading'];
+    }
+    return [];
+  }
+
+  if (state.phase === 'AWAITING_MARKET' && state.market) {
+    if (state.market.activeOffer) {
+      const offer = state.market.activeOffer;
+      if (viewer.role === 'admin') return ['AcceptTrade', 'RejectTrade'];
+      const out: Command['type'][] = [];
+      if (viewer.playerId === offer.targetPlayerId) out.push('AcceptTrade', 'RejectTrade');
+      else if (viewer.playerId === offer.proposerId) out.push('RejectTrade');
+      return out;
+    }
+    return ['ProposeTrade', 'CloseMarket'];
+  }
+
+  if (state.phase === 'AWAITING_MAJOR_CONTENTION' && state.pendingMajorContention) {
+    if (viewer.role === 'admin' || viewer.playerId === state.pendingMajorContention.playerId) {
+      return ['ChooseMajorExit'];
     }
     return [];
   }
@@ -85,7 +107,9 @@ export function getLegalActionsForState(state: GameState, viewer: Viewer): Comma
       const eventCard = eventId ? state.cards[eventId] : undefined;
       const reality = eventCard ? eventCardToReality(eventCard) : 'treasure';
       const actions: Command['type'][] =
-        reality === 'treasure' ? ['ResolveEvent'] : ['ResolveEvent', 'AbandonCenter'];
+        reality === 'treasure' || reality === 'major_resonance'
+          ? ['ResolveEvent']
+          : ['ResolveEvent', 'AbandonCenter'];
       if (
         activePlayer &&
         state.ruleset.features.elementalEffects &&
@@ -142,6 +166,7 @@ export function getLegalActionsForState(state: GameState, viewer: Viewer): Comma
     case 'READY_TO_END_TURN':
       return appendAnytimeReaderBonus(['EndTurn']);
     case 'GAME_OVER':
+    default:
       return [];
   }
 }
@@ -369,6 +394,13 @@ export function projectView(state: GameState, viewer: Viewer): ProjectedGameView
       hand: canSeeHand ? mapCardIds(p.hand, state.cards) : null,
       eclipseCount: p.eclipseCount,
       eclipseBonusVP: p.eclipseBonusVP,
+      eclipseTrophies: [...(p.eclipseTrophies ?? [])],
+      activeCourtAuraVP: getActiveCourtAuraVP({
+        player: p,
+        board: state.board,
+        majorPending: state.majorPending,
+        cards: state.cards
+      }),
       effectUsedThisTurn: p.effectUsedThisTurn,
       elementalActionsUsedThisTurn: getElementalActionsUsedCount(p),
       pendingReaderBonusCount: p.pendingReaderBonuses.filter(
@@ -508,6 +540,46 @@ function buildOrderedZoneItems(params: {
       }
     : null;
 
+  const pendingMajorContention: ProjectedMajorContentionView | null = state.pendingMajorContention
+    ? {
+        playerId: state.pendingMajorContention.playerId,
+        incumbentCard: state.cards[state.pendingMajorContention.incumbentCardId]!,
+        arrivingCard: state.cards[state.pendingMajorContention.arrivingCardId]!,
+        incumbentDormant: isMajorDormant(
+          state.pendingMajorContention.incumbentCardId,
+          state.majorPending
+        ),
+        reason: `Rank 7–9 Major Contention: choose whether resident ${state.cards[state.pendingMajorContention.incumbentCardId]!.shortLabel} or arriving ${state.cards[state.pendingMajorContention.arrivingCardId]!.shortLabel} exits Parallel Dimension to the Veil.`
+      }
+    : null;
+
+  const market: ProjectedMarketView | null = state.market
+    ? {
+        openedAfterRound: state.market.openedAfterRound,
+        activeOffer: state.market.activeOffer
+          ? {
+              id: state.market.activeOffer.id,
+              proposerId: state.market.activeOffer.proposerId,
+              proposerName:
+                state.players.find((p) => p.id === state.market!.activeOffer!.proposerId)?.name ??
+                state.market.activeOffer.proposerId,
+              targetPlayerId: state.market.activeOffer.targetPlayerId,
+              targetPlayerName:
+                state.players.find((p) => p.id === state.market!.activeOffer!.targetPlayerId)
+                  ?.name ?? state.market.activeOffer.targetPlayerId,
+              offerCards: mapCardIds(state.market.activeOffer.offerCardIds, state.cards),
+              requestCards: mapCardIds(state.market.activeOffer.requestCardIds, state.cards),
+              requestedCount: state.market.activeOffer.requestedCount,
+              status: state.market.activeOffer.status
+            }
+          : null,
+        offersMadeByPlayer: { ...state.market.offersMadeByPlayer },
+        maxOffersPerPlayer: state.market.maxOffersPerPlayer,
+        completedTrades: state.market.completedTrades,
+        passedPlayerIds: [...state.market.passedPlayerIds]
+      }
+    : null;
+
   return {
     viewer,
     engineVersion: state.engineVersion,
@@ -538,6 +610,9 @@ function buildOrderedZoneItems(params: {
     currentReading: currentReadingView,
     readingHistory: [...state.readingHistory],
     pendingEarthReorder,
+    pendingMajorContention,
+    market,
+    dormantMajorCardIds: state.majorPending.map((m) => m.cardId),
     board: {
       event: eventItems,
       center: centerItems,
@@ -546,6 +621,7 @@ function buildOrderedZoneItems(params: {
     players,
     deckComponents: buildDeckComponents(state, viewer, canInspectCenter),
     legalActions: getLegalActionsForState(state, viewer),
+    actionDescriptors: buildActionDescriptors(state, viewer),
     events: projectedEvents,
     commandCount: state.commandHistory.length
   };

@@ -1,6 +1,6 @@
 import type { Ruleset, RuleStatus } from './types.js';
 
-export const ENGINE_VERSION = '0.6.0-r1';
+export const ENGINE_VERSION = '0.7.0-classic-mvp';
 
 const INACTIVE_FUTURE_FEATURES = {
   readings: false,
@@ -33,6 +33,7 @@ const MILESTONE_D1_FEATURES = {
 
 const MILESTONE_E_FEATURES = {
   ...MILESTONE_D1_FEATURES,
+  tradingMarket: true,
   majors: true,
   eclipse: true,
   triangulation: true
@@ -81,6 +82,9 @@ const BASE_E_DEFAULTS = {
   elementalTiming: 'before_reading' as const,
   allowRevealedBoardElemental: true,
   abandonedClaimPolicy: 'free_no_prep' as const,
+  majorContentionEnabled: true,
+  majorDefaultDeparture: 'lifo' as const,
+  eclipseCardDisposition: 'both_to_veil' as const,
   maxElementalActionsPerTurn: 1 as const,
   elementalNativePrimaryBonusVP: 0,
   waterResurfaceDestination: 'shuffled' as const
@@ -89,11 +93,11 @@ const BASE_E_DEFAULTS = {
 export const RULESET_PRESETS: Readonly<Record<string, Ruleset>> = {
   'poker-proto-e': {
     id: 'poker-proto-e',
-    version: '1.6.0',
-    name: 'Classic Prototype — R1 (48 Cards · 3-Card Hand, Reject-Replace, 3-Slot Board & Courts)',
+    version: '2.0.0',
+    name: 'Classic Nexus Eclipse — Complete MVP (48 Cards · Courts, Contention, Eclipse, Triangulation & Market)',
     category: 'prototype',
     description:
-      '48-card Bicycle/Poker Classic Prototype (36 Minors + 12 Classic Court Major Proxies): guaranteed 3 playable starting hand cards, Turn-1 3-slot Board, Reject-and-Replace readings, flexible anytime Reader Bonus, private Earth Immediate Future peek, and Classic Eclipse/Triangulation.',
+      'Complete 48-card Bicycle/Poker Classic MVP (36 Minors + 12 Classic Court Major Proxies): Board-Set-First → Optional Elemental Prep → Reading → Revealed-Board Intervention, dedicated Parallel Court contention (LIFO / Rank 7-9 choice), visible Eclipse trophies, deliberate Earth Triangulation, and scheduled Trading Market every 2 rounds.',
     deckProfile: 'classic-48',
     maxMinorRank: 9,
     includeCourts: true,
@@ -113,7 +117,7 @@ export const RULESET_PRESETS: Readonly<Record<string, Ruleset>> = {
     trialAdvantageBonusVP: 1,
     sacrificeDestination: 'veil',
     declinedAbandonedPolicy: 'send_to_veil',
-    marketFrequencyRounds: 0,
+    marketFrequencyRounds: 2,
     eclipseVictoryCount: 'players-plus-one',
     l11TargetRank: 0,
     stopOnTargetRank: false,
@@ -122,11 +126,11 @@ export const RULESET_PRESETS: Readonly<Record<string, Ruleset>> = {
   },
   'poker-proto-e-quick': {
     id: 'poker-proto-e-quick',
-    version: '1.6.0',
-    name: 'Classic Prototype — R1 Quick Eclipse (1 Eclipse Wins)',
+    version: '2.0.0',
+    name: 'Classic Nexus Eclipse — Quick Eclipse (1 Eclipse Wins)',
     category: 'prototype',
     description:
-      '48-card Classic Courts prototype tuned for fast playtesting: first Eclipse or Triangulation wins immediately, with pre-reading Elemental Prep.',
+      '48-card Classic MVP tuned for fast playtesting: first Eclipse or deliberate Triangulation wins immediately, with full Court contention, Trading Market, and Board-first Elemental Prep.',
     deckProfile: 'classic-48',
     maxMinorRank: 9,
     includeCourts: true,
@@ -146,7 +150,7 @@ export const RULESET_PRESETS: Readonly<Record<string, Ruleset>> = {
     trialAdvantageBonusVP: 1,
     sacrificeDestination: 'veil',
     declinedAbandonedPolicy: 'send_to_veil',
-    marketFrequencyRounds: 0,
+    marketFrequencyRounds: 2,
     eclipseVictoryCount: 1,
     l11TargetRank: 0,
     stopOnTargetRank: false,
