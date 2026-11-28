@@ -23,6 +23,7 @@ export type WaterResurfaceDestination = 'shuffled' | 'top' | 'bottom';
 export type ReaderBonusPolicy = 'record_only' | 'free_tier1_elemental_next_turn';
 export type ElementalTimingPolicy = 'after_encounter' | 'before_reading';
 export type ElementalActionsPerTurnPolicy = 1 | 2 | 3 | 'unlimited';
+export type AbandonedClaimPolicy = 'free_treasure_legacy' | 'free_no_prep';
 
 export type EvolutionColorPolicy = 'same-color' | 'same-element' | 'any';
 export type EvolutionTieBreakPolicy =
@@ -109,6 +110,8 @@ export interface Ruleset {
   readonly emptyChamberMode?: boolean; // R1 RD-15 AGREED: false fills all 3 Board slots on Turn 1; true leaves Parallel vacant until Major
   readonly rotateEventOnCenterDiscard: boolean; // Provisional: false (MC baseline) | true (D1 cleanup rotation)
   readonly elementalTiming: ElementalTimingPolicy; // 'after_encounter' (D1 baseline) | 'before_reading' (E default)
+  readonly allowRevealedBoardElemental?: boolean; // R1.1: true allows 1 ordinary hand elemental action either before Reading OR after Center+Event reveal
+  readonly abandonedClaimPolicy?: AbandonedClaimPolicy; // R1.1 AB-1: 'free_no_prep' checks Abandoned BEFORE Elemental Prep and skips both Reading & Prep when claimed
   readonly maxElementalActionsPerTurn?: ElementalActionsPerTurnPolicy; // Baseline: 1; chaining (2/3/unlimited) on hold as experimental setting
   readonly elementalNativePrimaryBonusVP: number; // Provisional: 0 (uses exact card VP 1/2/3 by default)
   readonly waterResurfaceDestination: WaterResurfaceDestination; // Provisional: 'shuffled' | 'top' | 'bottom'

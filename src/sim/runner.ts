@@ -18,6 +18,7 @@ export interface SingleRunReport {
   readonly totalEvolutions: number;
   readonly maxChainLength: number;
   readonly readingsGiven: number;
+  readonly readingsOfferedByPlayer: Readonly<Record<string, number>>;
   readonly adviceFollowed: number;
   readonly deceptiveReadings: number;
   readonly readerBonusesGranted: number;
@@ -29,6 +30,11 @@ export interface SingleRunReport {
   readonly trialsPassed: number;
   readonly centersAbandoned: number;
   readonly abandonedClaimedFree: number;
+  readonly abandonedDeclined: number;
+  readonly maxConsecutiveAbandons: number;
+  readonly hadConsecutiveAbandon: boolean;
+  readonly consecutiveAbandonPlayerWon: boolean;
+  readonly revealedBoardElementalActions: number;
   readonly airEffectsUsed: number;
   readonly fireEffectsUsed: number;
   readonly waterEffectsUsed: number;
@@ -77,6 +83,8 @@ export interface BatchSimulationSummary {
   readonly avgMaxChainLength: number;
   readonly multiStepChainRuns: number;
   readonly totalReadings: number;
+  readonly avgReadingsPerPlayer: Readonly<Record<string, number>>;
+  readonly readerParityRatio: number;
   readonly adviceFollowPct: number;
   readonly deceptionPct: number;
   readonly avgReaderBonuses: number;
@@ -87,6 +95,11 @@ export interface BatchSimulationSummary {
   readonly totalTrialsPassed: number;
   readonly totalAbandoned: number;
   readonly totalAbandonedClaimedFree: number;
+  readonly totalAbandonedDeclined: number;
+  readonly abandonedClaimRatePct: number;
+  readonly gamesWithConsecutiveAbandon: number;
+  readonly winRateAfterConsecutiveAbandonPct: number;
+  readonly totalRevealedBoardElementalActions: number;
   readonly totalWithheldOnAbandon: number;
   readonly totalAirEffects: number;
   readonly totalFireEffects: number;
@@ -140,6 +153,11 @@ export function runSingleSimulation(
   const readerBonusesConsumed = state.events.filter((e) => e.type === 'ReaderBonusConsumed').length;
   const readerBonusesExpired = state.events.filter((e) => e.type === 'ReaderBonusExpired').length;
   const readingsGiven = state.readingHistory.length;
+  const readingsOfferedByPlayer: Record<string, number> = {};
+  for (const p of state.players) readingsOfferedByPlayer[p.id] = 0;
+  for (const r of state.readingHistory) {
+    readingsOfferedByPlayer[r.readerId] = (readingsOfferedByPlayer[r.readerId] ?? 0) + 1;
+  }
   const adviceFollowed = state.readingHistory.filter((r) => r.adviceFollowed === true).length;
   const deceptiveReadings = state.readingHistory.filter((r) => r.adviceTruthful === false).length;
   const readerBonusesWithheldOnAbandon = state.readingHistory.filter(
@@ -151,6 +169,45 @@ export function runSingleSimulation(
   const trialsPassed = state.events.filter((e) => e.type === 'TrialPassed').length;
   const centersAbandoned = state.events.filter((e) => e.type === 'CenterAbandoned').length;
   const abandonedClaimedFree = state.events.filter((e) => e.type === 'AbandonedCardClaimed').length;
+  const abandonedDeclined = state.events.filter((e) => e.type === 'AbandonedCardDeclined').length;
+  const revealedBoardElementalActions = state.events.filter(
+    (e) =>
+      e.type === 'ElementalEffectActivated' && e.phase === 'AWAITING_EVENT_RESOLUTION'
+  ).length;
+
+  // Track consecutive abandon streaks per player across their turns
+  const currentAbandonStreak: Record<string, number> = {};
+  const maxAbandonStreakByPlayer: Record<string, number> = {};
+  const turnHadAbandon: Record<string, boolean> = {};
+  for (const p of state.players) {
+    currentAbandonStreak[p.id] = 0;
+    maxAbandonStreakByPlayer[p.id] = 0;
+  }
+  for (const ev of state.events) {
+    if (ev.type === 'CenterAbandoned') {
+      turnHadAbandon[`${ev.turn}:${ev.actor}`] = true;
+    } else if (ev.type === 'TurnFinished') {
+      const pid = ev.actor;
+      if (turnHadAbandon[`${ev.turn}:${pid}`]) {
+        currentAbandonStreak[pid] = (currentAbandonStreak[pid] ?? 0) + 1;
+        maxAbandonStreakByPlayer[pid] = Math.max(
+          maxAbandonStreakByPlayer[pid] ?? 0,
+          currentAbandonStreak[pid]!
+        );
+      } else {
+        currentAbandonStreak[pid] = 0;
+      }
+    }
+  }
+  const maxConsecutiveAbandons = Math.max(0, ...Object.values(maxAbandonStreakByPlayer));
+  const consecutiveAbandonPlayerIds = Object.entries(maxAbandonStreakByPlayer)
+    .filter(([, streak]) => streak >= 2)
+    .map(([pid]) => pid);
+  const hadConsecutiveAbandon = consecutiveAbandonPlayerIds.length > 0;
+  const winnerIds = state.outcome?.winnerIds ?? [];
+  const consecutiveAbandonPlayerWon = consecutiveAbandonPlayerIds.some((pid) =>
+    winnerIds.includes(pid)
+  );
   const eclipsesFormed = state.events.filter((e) => e.type === 'EclipseFormed').length;
   const triangulationsCompleted = state.events.filter((e) => e.type === 'TriangulationCompleted').length;
 
@@ -183,6 +240,7 @@ export function runSingleSimulation(
     totalEvolutions,
     maxChainLength,
     readingsGiven,
+    readingsOfferedByPlayer,
     adviceFollowed,
     deceptiveReadings,
     readerBonusesGranted,
@@ -194,6 +252,11 @@ export function runSingleSimulation(
     trialsPassed,
     centersAbandoned,
     abandonedClaimedFree,
+    abandonedDeclined,
+    maxConsecutiveAbandons,
+    hadConsecutiveAbandon,
+    consecutiveAbandonPlayerWon,
+    revealedBoardElementalActions,
     airEffectsUsed,
     fireEffectsUsed,
     waterEffectsUsed,
@@ -251,7 +314,12 @@ export function runSimulationBatch(params: {
   let totalTrialsPassed = 0;
   let totalAbandoned = 0;
   let totalAbandonedClaimedFree = 0;
+  let totalAbandonedDeclined = 0;
+  let gamesWithConsecutiveAbandon = 0;
+  let winsAfterConsecutiveAbandon = 0;
+  let totalRevealedBoardElementalActions = 0;
   let totalWithheldOnAbandon = 0;
+  const readingsByPlayerTotals: Record<string, number> = {};
   let totalAirEffects = 0;
   let totalFireEffects = 0;
   let totalWaterEffects = 0;
@@ -303,6 +371,15 @@ export function runSimulationBatch(params: {
     totalTrialsPassed += report.trialsPassed;
     totalAbandoned += report.centersAbandoned;
     totalAbandonedClaimedFree += report.abandonedClaimedFree;
+    totalAbandonedDeclined += report.abandonedDeclined;
+    if (report.hadConsecutiveAbandon) {
+      gamesWithConsecutiveAbandon += 1;
+      if (report.consecutiveAbandonPlayerWon) winsAfterConsecutiveAbandon += 1;
+    }
+    totalRevealedBoardElementalActions += report.revealedBoardElementalActions;
+    for (const [pid, count] of Object.entries(report.readingsOfferedByPlayer)) {
+      readingsByPlayerTotals[pid] = (readingsByPlayerTotals[pid] ?? 0) + count;
+    }
     totalWithheldOnAbandon += report.readerBonusesWithheldOnAbandon;
     totalAirEffects += report.airEffectsUsed;
     totalFireEffects += report.fireEffectsUsed;
@@ -336,6 +413,16 @@ export function runSimulationBatch(params: {
     };
   });
 
+  const avgReadingsPerPlayer: Record<string, number> = {};
+  const playerReadingValues = Object.values(readingsByPlayerTotals);
+  for (const [pid, tot] of Object.entries(readingsByPlayerTotals)) {
+    avgReadingsPerPlayer[pid] = Number((tot / safeRuns).toFixed(2));
+  }
+  const minPlayerReadings = playerReadingValues.length > 0 ? Math.min(...playerReadingValues) : 0;
+  const maxPlayerReadings = playerReadingValues.length > 0 ? Math.max(...playerReadingValues) : 0;
+  const readerParityRatio =
+    maxPlayerReadings > 0 ? Number((minPlayerReadings / maxPlayerReadings).toFixed(3)) : 1;
+
   return {
     rulesetId: ruleset.id,
     rulesetVersion: ruleset.version,
@@ -359,6 +446,8 @@ export function runSimulationBatch(params: {
     avgMaxChainLength: Number((totalMaxChain / safeRuns).toFixed(2)),
     multiStepChainRuns,
     totalReadings,
+    avgReadingsPerPlayer,
+    readerParityRatio,
     adviceFollowPct: totalReadings > 0 ? Number(((totalAdviceFollowed / safeReadings) * 100).toFixed(1)) : 0,
     deceptionPct: totalReadings > 0 ? Number(((totalDeceptive / safeReadings) * 100).toFixed(1)) : 0,
     avgReaderBonuses: Number((totalReaderBonuses / safeRuns).toFixed(2)),
@@ -369,6 +458,15 @@ export function runSimulationBatch(params: {
     totalTrialsPassed,
     totalAbandoned,
     totalAbandonedClaimedFree,
+    totalAbandonedDeclined,
+    abandonedClaimRatePct:
+      totalAbandoned > 0 ? Number(((totalAbandonedClaimedFree / totalAbandoned) * 100).toFixed(1)) : 0,
+    gamesWithConsecutiveAbandon,
+    winRateAfterConsecutiveAbandonPct:
+      gamesWithConsecutiveAbandon > 0
+        ? Number(((winsAfterConsecutiveAbandon / gamesWithConsecutiveAbandon) * 100).toFixed(1))
+        : 0,
+    totalRevealedBoardElementalActions,
     totalWithheldOnAbandon,
     totalAirEffects,
     totalFireEffects,

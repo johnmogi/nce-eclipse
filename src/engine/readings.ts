@@ -82,6 +82,7 @@ export function finalizeReadingReward(params: {
   phase: GamePhase;
   ruleset: Ruleset;
   nextSeq: () => number;
+  overrideWithheldReason?: string;
 }): void {
   const {
     reading,
@@ -95,7 +96,8 @@ export function finalizeReadingReward(params: {
     round,
     phase,
     ruleset,
-    nextSeq
+    nextSeq,
+    overrideWithheldReason
   } = params;
 
   const readerIdx = players.findIndex((p) => p.id === reading.readerId);
@@ -103,9 +105,9 @@ export function finalizeReadingReward(params: {
 
   let grant = false;
   let trigger: 'good_claimed' | 'bad_discarded' | 'good_abandoned' | null = null;
-  let reason = 'advice_not_followed';
+  let reason = overrideWithheldReason ?? 'advice_not_followed';
 
-  if (reading.adviceFollowed) {
+  if (!overrideWithheldReason && reading.adviceFollowed) {
     if (reading.advice === 'bad' && resolution === 'discarded') {
       grant = true;
       trigger = 'bad_discarded';

@@ -1,4 +1,5 @@
 import {
+  canActivateHandElementalInPhase,
   canSpendReaderBonusInPhase,
   type BoardTargetSlot,
   type Card,
@@ -69,7 +70,7 @@ export function getElementalTargetContext(
     boardParallel: false,
     veil: false
   };
-  const canUseHandNow = view.phase === 'AWAITING_ELEMENTAL_ACTION';
+  const canUseHandNow = canActivateHandElementalInPhase(view.phase, view.ruleset);
   const canUseBonusNow = canSpendReaderBonusInPhase(view.phase, view.ruleset);
   if ((!canUseHandNow && !canUseBonusNow) || !view.ruleset.features.elementalEffects) {
     return {

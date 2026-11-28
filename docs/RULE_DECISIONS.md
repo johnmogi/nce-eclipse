@@ -157,6 +157,19 @@
 - **Turn Sequence Confirmed (`28 Nov 2026`):** **FIRST the Board is set (all 3 positions populated), THEN Elemental Prep from hand is available**, and elemental cards (Air/Fire/Earth) can affect order across **both the Board and the Deck of Days (Immediate Future)**.
 - **Creator Decision:** `ON HOLD (default = 1; experimental setting available in Rules)`
 
+### `RD-18` — Revealed-Board Elemental Intervention & AB-1 Abandonment Balance `[AGREED — IMPLEMENTED IN R1.1]`
+- **Revealed-Board Elemental Intervention (`allowRevealedBoardElemental: true` on Classic R1):**
+  - One ordinary elemental hand action per turn (`maxElementalActionsPerTurn: 1` default) is usable **either** proactively before Reading (`AWAITING_ELEMENTAL_ACTION`) **or** reactively after `Center + Event` flip face-up (`AWAITING_EVENT_RESOLUTION`), before reconciliation.
+  - Center remains strictly concealed until the Reading decision (`PursueCenter` / `DiscardCenter`); two ordinary actions are never allowed in one turn under default settings.
+  - Replacing/removing a revealed `Event` **always** draws & flips a real replacement Event (never turning a failed Trial into an automatic free claim; Fire on revealed `Event` requires `days.length >= 1`).
+  - Removing or altering a revealed `Center` cleanly settles any pending Reading reward as `withheld` (`center_removed_by_elemental` / `center_altered_by_elemental`); removing `Center` clears remaining Minor `Event → Veil` and transitions to `READY_TO_END_TURN`.
+- **AB-1 Abandonment Default (`abandonedClaimPolicy: 'free_no_prep'` on Classic R1):**
+  - On Turn `T+1` after an abandonment, `AWAITING_ABANDONED_CHOICE` runs **before** Elemental Prep. Claiming the abandoned card remains a free Treasure **but skips both Reading and Elemental Prep**; declining sends it to Veil and begins a normal turn (`Elemental Prep → Reading → Encounter`).
+  - Bot `handCount <= 2` automatic abandoned-card grab removed in `src/sim/botController.ts`; bots now evaluate actual card usefulness strictly from player-safe `ProjectedGameView`.
+- **Reproducible R2 Defect Recorded (`R2-BUG-01` — Strictly Deferred to R2):**
+  - In Classic R1 playtest logs (`[#034]–[#038]`), arriving `K♣` (`0 VP` Classic Court) overflowed into `boardEvent` (`src/engine/majors.ts:260-280`) and was implicitly interpreted as a Treasure Event by `src/engine/reconciliation.ts:18` (`if (eventCard.family === 'classic-court') return 'treasure'`). Courts must **never** acquire Minor Event realities through implicit fallback logic; scheduled for R2 Major circulation fix (`RD-06`/`RD-07`), NOT redesigned in R1.1.
+- **Creator Decision:** **`AGREED & IMPLEMENTED IN R1.1 (28 Nov 2026)`**
+
 ---
 
 ## Gate R5 Decisions — Future Sun/Moon Major Arcana (Deferred Until After R4)

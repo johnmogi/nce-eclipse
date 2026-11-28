@@ -16,6 +16,7 @@ import {
   type Command,
   type GameState
 } from '../src/engine/index.js';
+import { chooseFairBotCommand } from '../src/sim/botController.js';
 import { runSimulationBatch } from '../src/sim/runner.js';
 
 function mustDispatch(state: GameState, cmd: Command): GameState {
@@ -417,7 +418,283 @@ describe('Stage R1 — First-Turn Reliability, Reject-Replace, 3-Slot Board, Any
     expect(checkInvariants(s).ok).toBe(true);
   });
 
-  it('passes 500-run Stage R1 simulation gate with zero invariant or replay failures', () => {
+  it('R1.1 Revealed-Board Intervention: Fire on revealed Trial Event replaces it with a real revealed Event (never free claim), preserves Reader reward on claiming Center, and enforces 1-action-per-turn cap', () => {
+    let s = createGame(classicR1, 'r1-1-revealed-fire-event', {
+      startingElements: ['air', 'fire'],
+      overrideHands: [
+        ['classic-fire-04', 'classic-earth-02', 'classic-water-03'], // 4♣ (Fire 2 VP), 2♦ (1 VP), 3♥ (1 VP)
+        ['classic-earth-08', 'classic-water-09', 'classic-air-08']
+      ],
+      overrideDaysTop: [
+        'classic-air-02',   // Event: 2♠ (1 VP Trial!)
+        'classic-fire-09',  // Center: 9♣ (3 VP)
+        'classic-earth-06', // Parallel: 6♦
+        'classic-earth-05', // Days #1: 5♦ (2 VP Barrier — replacement Event!)
+        'classic-water-08'
+      ]
+    });
+
+    // Skip Pre-Reading Prep -> Reading -> Pursue -> Center (9♣) + Event (2♠ Trial) revealed!
+    s = mustDispatch(s, { type: 'AdvanceToReading', playerId: 'p1' });
+    s = mustDispatch(s, { type: 'GiveReading', playerId: 'p2', advice: 'good' });
+    s = mustDispatch(s, { type: 'PursueCenter', playerId: 'p1' });
+    expect(s.phase).toBe('AWAITING_EVENT_RESOLUTION');
+    expect(s.eventRevealed).toBe(true);
+    expect(s.centerRevealed).toBe(true);
+
+    // Intervene on Revealed Board: Fire (4♣) burns revealed Trial Event (2♠) -> replacement 5♦ (Barrier 2 VP) flips face-up!
+    s = mustDispatch(s, {
+      type: 'UseElementalEffect',
+      playerId: 'p1',
+      element: 'fire',
+      sourceCardId: 'classic-fire-04',
+      targetZone: 'board',
+      targetBoardSlots: ['event']
+    });
+
+    expect(s.phase).toBe('AWAITING_EVENT_RESOLUTION');
+    expect(s.board.event).toEqual(['classic-earth-05']);
+    expect(s.eventRevealed).toBe(true);
+    expect(s.board.center).toEqual(['classic-fire-09']);
+    expect(s.veil).toContain('classic-fire-04');
+    expect(s.veil).toContain('classic-air-02');
+    expect(s.players[0]!.effectUsedThisTurn).toBe(true);
+
+    // Cannot take a 2nd ordinary elemental action on the same turn!
+    const secondAttempt = dispatch(s, {
+      type: 'UseElementalEffect',
+      playerId: 'p1',
+      element: 'water',
+      sourceCardId: 'classic-water-03',
+      targetZone: 'veil',
+      targetCardIds: ['classic-air-02']
+    });
+    expect(secondAttempt.ok).toBe(false);
+    if (!secondAttempt.ok) {
+      expect(secondAttempt.error.code).toBe('EFFECT_ALREADY_USED_THIS_TURN');
+    }
+
+    // Reconcile replacement 5♦ Barrier (2 VP) with A♠ (1 VP) + sacrifice 2♦ (1 VP) -> claims original 9♣ AND grants P2 Reader Bonus!
+    s = mustDispatch(s, {
+      type: 'ResolveEvent',
+      playerId: 'p1',
+      sacrificeCardIds: ['classic-earth-02']
+    });
+    expect(s.players[0]!.hand).toContain('classic-fire-09');
+    expect(s.players[1]!.pendingReaderBonuses.some((b) => b.status === 'available')).toBe(true);
+    expect(checkInvariants(s).ok).toBe(true);
+  });
+
+  it('R1.1 Revealed-Board Intervention: rejects Fire on revealed Event when Days is empty, and blocks Revealed-Board action if Pre-Reading action was already spent', () => {
+    let s = createGame(classicR1, 'r1-1-pre-blocks-post', {
+      startingElements: ['air', 'fire'],
+      overrideHands: [
+        ['classic-fire-04', 'classic-air-05', 'classic-water-08'],
+        ['classic-earth-09', 'classic-water-09', 'classic-air-09']
+      ],
+      overrideDaysTop: [
+        'classic-air-02',   // Event: 2♠ Trial
+        'classic-fire-09',  // Center: 9♣
+        'classic-earth-06', // Parallel
+        'classic-earth-05'
+      ]
+    });
+
+    // Spend the 1 ordinary action BEFORE Reading
+    s = mustDispatch(s, {
+      type: 'UseElementalEffect',
+      playerId: 'p1',
+      element: 'air',
+      sourceCardId: 'classic-air-05',
+      targetZone: 'days',
+      daysCount: 1
+    });
+    expect(s.phase).toBe('AWAITING_READING');
+    s = mustDispatch(s, { type: 'GiveReading', playerId: 'p2', advice: 'good' });
+    s = mustDispatch(s, { type: 'PursueCenter', playerId: 'p1' });
+    expect(s.phase).toBe('AWAITING_EVENT_RESOLUTION');
+
+    // Trying to spend a 2nd ordinary elemental action after reveal MUST fail!
+    const blocked = dispatch(s, {
+      type: 'UseElementalEffect',
+      playerId: 'p1',
+      element: 'fire',
+      sourceCardId: 'classic-fire-04',
+      targetZone: 'board',
+      targetBoardSlots: ['event']
+    });
+    expect(blocked.ok).toBe(false);
+    if (!blocked.ok) {
+      expect(blocked.error.code).toBe('EFFECT_ALREADY_USED_THIS_TURN');
+    }
+
+    // Also verify Fire on revealed Event is rejected when Days is empty (never creates a free claim)
+    let emptyDaysState = createGame(classicR1, 'r1-1-fire-empty-days', {
+      startingElements: ['air', 'fire'],
+      overrideHands: [
+        ['classic-fire-04', 'classic-earth-02', 'classic-water-03'],
+        ['classic-earth-08', 'classic-water-09', 'classic-air-08']
+      ],
+      overrideDaysTop: ['classic-air-02', 'classic-fire-09', 'classic-earth-06']
+    });
+    emptyDaysState = mustDispatch(emptyDaysState, { type: 'AdvanceToReading', playerId: 'p1' });
+    emptyDaysState = mustDispatch(emptyDaysState, { type: 'GiveReading', playerId: 'p2', advice: 'good' });
+    emptyDaysState = mustDispatch(emptyDaysState, { type: 'PursueCenter', playerId: 'p1' });
+    const depleted: GameState = { ...emptyDaysState, days: [] };
+    const noRefill = dispatch(depleted, {
+      type: 'UseElementalEffect',
+      playerId: 'p1',
+      element: 'fire',
+      sourceCardId: 'classic-fire-04',
+      targetZone: 'board',
+      targetBoardSlots: ['event']
+    });
+    expect(noRefill.ok).toBe(false);
+    if (!noRefill.ok) {
+      expect(noRefill.error.code).toBe('INSUFFICIENT_TARGET_CARDS');
+    }
+  });
+
+  it('R1.1 Revealed-Board Intervention: Earth swap (Event ↔ Center) keeps both face-up and settles Reader reward as withheld; Fire on Center clears encounter cleanly with no abandoned freebie', () => {
+    // Part A: Earth swap Event ↔ Center during AWAITING_EVENT_RESOLUTION
+    let s1 = createGame(classicR1, 'r1-1-earth-swap-revealed', {
+      startingElements: ['air', 'fire'],
+      overrideHands: [
+        ['classic-earth-05', 'classic-water-04', 'classic-water-06'], // 5♦ = 2 VP Earth
+        ['classic-earth-08', 'classic-water-09', 'classic-air-08']
+      ],
+      overrideDaysTop: [
+        'classic-air-03',   // Event: 3♠ (1 VP Trial)
+        'classic-fire-08',  // Center: 8♣ (3 VP)
+        'classic-earth-06'  // Parallel
+      ]
+    });
+    s1 = mustDispatch(s1, { type: 'AdvanceToReading', playerId: 'p1' });
+    s1 = mustDispatch(s1, { type: 'GiveReading', playerId: 'p2', advice: 'good' });
+    s1 = mustDispatch(s1, { type: 'PursueCenter', playerId: 'p1' });
+
+    s1 = mustDispatch(s1, {
+      type: 'StartEarthPeek',
+      playerId: 'p1',
+      sourceCardId: 'classic-earth-05',
+      targetBoardSlots: ['event', 'center'],
+      daysCount: 0
+    });
+    expect(s1.phase).toBe('AWAITING_EARTH_REORDER');
+
+    s1 = mustDispatch(s1, {
+      type: 'CommitEarthReorder',
+      playerId: 'p1',
+      newOrder: ['classic-fire-08', 'classic-air-03'] // 8♣ -> Event (Treasure!), 3♠ -> Center
+    });
+    expect(s1.phase).toBe('AWAITING_EVENT_RESOLUTION');
+    expect(s1.eventRevealed).toBe(true);
+    expect(s1.centerRevealed).toBe(true);
+    expect(s1.board.event).toEqual(['classic-fire-08']);
+    expect(s1.board.center).toEqual(['classic-air-03']);
+    // Reading on original 8♣ settled as withheld because Center was altered!
+    expect(s1.readingHistory.at(-1)?.readerReward).toBe('withheld');
+    expect(s1.readingHistory.at(-1)?.readerRewardReason).toBe('center_altered_by_elemental');
+
+    // Claim 3♠ freely under new Treasure Event (8♣) -> evolves A♠ -> 3♠!
+    s1 = mustDispatch(s1, { type: 'ResolveEvent', playerId: 'p1', sacrificeCardIds: [] });
+    expect(s1.players[0]!.lineage.rank).toBe(3);
+    expect(checkInvariants(s1).ok).toBe(true);
+
+    // Part B: Fire burns revealed Center -> clears Minor Event to Veil, settles reading withheld, READY_TO_END_TURN, zero abandonment!
+    let s2 = createGame(classicR1, 'r1-1-fire-center-revealed', {
+      startingElements: ['air', 'fire'],
+      overrideHands: [
+        ['classic-fire-04', 'classic-water-04', 'classic-water-06'],
+        ['classic-earth-08', 'classic-water-09', 'classic-air-08']
+      ],
+      overrideDaysTop: [
+        'classic-air-02',   // Event: 2♠ Trial
+        'classic-earth-03', // Center: 3♦
+        'classic-earth-06'  // Parallel
+      ]
+    });
+    s2 = mustDispatch(s2, { type: 'AdvanceToReading', playerId: 'p1' });
+    s2 = mustDispatch(s2, { type: 'GiveReading', playerId: 'p2', advice: 'good' });
+    s2 = mustDispatch(s2, { type: 'PursueCenter', playerId: 'p1' });
+
+    s2 = mustDispatch(s2, {
+      type: 'UseElementalEffect',
+      playerId: 'p1',
+      element: 'fire',
+      sourceCardId: 'classic-fire-04',
+      targetZone: 'board',
+      targetBoardSlots: ['center']
+    });
+    expect(s2.phase).toBe('READY_TO_END_TURN');
+    expect(s2.centerAbandoned).toBe(false);
+    expect(s2.board.center).toEqual([]);
+    expect(s2.board.event).toEqual([]);
+    expect(s2.veil).toContain('classic-earth-03');
+    expect(s2.veil).toContain('classic-air-02');
+    expect(s2.readingHistory.at(-1)?.readerReward).toBe('withheld');
+    expect(s2.readingHistory.at(-1)?.readerRewardReason).toBe('center_removed_by_elemental');
+    expect(checkInvariants(s2).ok).toBe(true);
+  });
+
+  it('R1.1 AB-1 Abandonment (free_no_prep) & Bot Policy: Turn T+1 enters AWAITING_ABANDONED_CHOICE before Prep; Claim skips both Reading & Prep; Bot with <=2 cards declines unhelpful off-color abandoned card to restore Human Reading', () => {
+    let s = createGame(classicR1, 'r1-1-ab1-abandonment', {
+      startingElements: ['air', 'fire'],
+      overrideHands: [
+        ['classic-fire-04', 'classic-water-04', 'classic-water-06'],
+        ['classic-water-08', 'classic-earth-08', 'classic-water-09'] // P2 is Fire (Black); 3♦ is Red/unhelpful!
+      ],
+      overrideDaysTop: [
+        'classic-air-02',   // T1 Event: 2♠ Trial
+        'classic-earth-03', // T1 Center: 3♦ (Red, off-color for Fire P2!)
+        'classic-fire-05',  // T1 Parallel: 5♣
+        'classic-earth-07', // T2 Event
+        'classic-air-06'    // T2 Parallel refill
+      ]
+    });
+
+    // T1: P1 pursues & abandons 3♦ -> ends Turn 1
+    s = mustDispatch(s, { type: 'AdvanceToReading', playerId: 'p1' });
+    s = mustDispatch(s, { type: 'GiveReading', playerId: 'p2', advice: 'bad' });
+    s = mustDispatch(s, { type: 'PursueCenter', playerId: 'p1' });
+    s = mustDispatch(s, { type: 'AbandonCenter', playerId: 'p1' });
+    s = mustDispatch(s, { type: 'EndTurn', playerId: 'p1' });
+
+    // AB-1: Turn 2 MUST open directly in AWAITING_ABANDONED_CHOICE (BEFORE Elemental Prep!)
+    expect(s.turn).toBe(2);
+    expect(s.activePlayerId).toBe('p2');
+    expect(s.phase).toBe('AWAITING_ABANDONED_CHOICE');
+
+    // Branch A — ClaimAbandonedCard skips BOTH Reading AND Elemental Prep -> straight to READY_TO_END_TURN!
+    const claimed = mustDispatch(s, { type: 'ClaimAbandonedCard', playerId: 'p2' });
+    expect(claimed.phase).toBe('READY_TO_END_TURN');
+    expect(claimed.players[1]!.hand).toContain('classic-earth-03');
+    expect(checkInvariants(claimed).ok).toBe(true);
+
+    // Branch B — Fair Bot even with handCount === 2 MUST decline off-color unhelpful 3♦!
+    const twoCardBotState: GameState = {
+      ...s,
+      players: [
+        s.players[0]!,
+        { ...s.players[1]!, hand: s.players[1]!.hand.slice(0, 2) }
+      ]
+    };
+    const p2View = projectView(twoCardBotState, { role: 'player', playerId: 'p2' });
+    expect(p2View.players[1]!.handCount).toBe(2);
+    const botDecision = chooseFairBotCommand(p2View, 'p2', 'bluffing-rival');
+    expect(botDecision?.type).toBe('DeclineAbandonedCard');
+
+    // Declining sends 3♦ to Veil and starts a normal Turn 2 (Elemental Prep -> Reading by P1!)
+    let declined = mustDispatch(s, { type: 'DeclineAbandonedCard', playerId: 'p2' });
+    expect(declined.veil).toContain('classic-earth-03');
+    expect(declined.phase).toBe('AWAITING_ELEMENTAL_ACTION');
+    declined = mustDispatch(declined, { type: 'AdvanceToReading', playerId: 'p2' });
+    expect(declined.phase).toBe('AWAITING_READING');
+    expect(declined.currentReading?.readerId).toBe('p1');
+    expect(checkInvariants(declined).ok).toBe(true);
+  });
+
+  it('passes 500-run Stage R1 simulation gate with zero invariant or replay failures and reports per-player reading & abandonment telemetry', () => {
     const batch = runSimulationBatch({
       ruleset: classicR1,
       runs: 500,
@@ -427,5 +704,8 @@ describe('Stage R1 — First-Turn Reliability, Reject-Replace, 3-Slot Board, Any
     });
     expect(batch.invariantFailures).toBe(0);
     expect(batch.replayFailures).toBe(0);
+    expect(batch.avgReadingsPerPlayer.p1).toBeGreaterThan(0);
+    expect(batch.avgReadingsPerPlayer.p2).toBeGreaterThan(0);
+    expect(batch.readerParityRatio).toBeGreaterThan(0.5);
   });
 });

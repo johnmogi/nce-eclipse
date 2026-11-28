@@ -284,8 +284,20 @@ export function chooseFairBotCommand(
   if (view.phase === 'AWAITING_ABANDONED_CHOICE') {
     const centerSlot = view.board.center[0];
     if (!centerSlot || centerSlot.hidden) return { type: 'DeclineAbandonedCard', playerId: botPlayerId };
+    const evolvesNow = isEligibleEvolution(
+      {
+        rank: bot.lineage.rank,
+        element: bot.lineage.element,
+        color: bot.lineage.color,
+        cardIds: bot.lineage.cardIds
+      },
+      centerSlot.card,
+      view.ruleset
+    );
     const helpful = isCardHelpfulForProjectedPlayer(bot, centerSlot.card, view.ruleset);
-    if (policy === 'always-claim' || helpful || bot.handCount <= 2) {
+    const highValueHelpful = helpful && centerSlot.card.vp >= 2;
+    const emptyHandEmergency = bot.handCount === 0;
+    if (policy === 'always-claim' || evolvesNow || highValueHelpful || emptyHandEmergency) {
       return { type: 'ClaimAbandonedCard', playerId: botPlayerId };
     }
     return { type: 'DeclineAbandonedCard', playerId: botPlayerId };

@@ -171,7 +171,27 @@ export function GameTable({
     view.phase === 'AWAITING_ELEMENTAL_ACTION' && canActAsActivePlayer && !isBotActing;
   const isBonusWindow =
     canSpendReaderBonusInPhase(view.phase, view.ruleset) && canActAsActivePlayer && !isBotActing;
-  const canTargetZones = isElementalWindow || (isBonusWindow && elementalSelection.sourceKind === 'bonus');
+  const [revealedHandMode, setRevealedHandMode] = useState<'sacrifice' | 'elemental'>('sacrifice');
+  const canUseRevealedBoardHandElemental =
+    view.phase === 'AWAITING_EVENT_RESOLUTION' &&
+    Boolean(view.ruleset.allowRevealedBoardElemental) &&
+    view.ruleset.features.elementalEffects &&
+    canActAsActivePlayer &&
+    !isBotActing &&
+    !activePlayer.effectUsedThisTurn &&
+    activePlayer.hand !== null &&
+    activePlayer.hand.length > 0;
+  useEffect(() => {
+    if (!canUseRevealedBoardHandElemental) {
+      setRevealedHandMode('sacrifice');
+    }
+  }, [canUseRevealedBoardHandElemental, view.phase, view.turn]);
+  const isRevealedElementalActive =
+    canUseRevealedBoardHandElemental && revealedHandMode === 'elemental';
+  const canTargetZones =
+    isElementalWindow ||
+    isRevealedElementalActive ||
+    (isBonusWindow && elementalSelection.sourceKind === 'bonus');
   const activeElement = elementalCtx.activeElement;
   const cmdBuild = buildElementalCommand(view, elementalSelection, elementalCtx);
 
@@ -238,6 +258,7 @@ export function GameTable({
   const canSelectSacrifice =
     view.phase === 'AWAITING_EVENT_RESOLUTION' &&
     liveReconciliation?.reality !== 'treasure' &&
+    !isRevealedElementalActive &&
     focusedPlayer.id === view.activePlayerId &&
     canActAsActivePlayer &&
     !isBotActing;
@@ -249,7 +270,7 @@ export function GameTable({
     !isBotActing;
 
   const canPickElementalHandCard =
-    isElementalWindow &&
+    (isElementalWindow || isRevealedElementalActive) &&
     focusedPlayer.id === view.activePlayerId &&
     !focusedPlayer.effectUsedThisTurn &&
     focusedHandHasCards;
@@ -867,7 +888,9 @@ export function GameTable({
                   onSendCommand({ type: 'ClaimAbandonedCard', playerId: view.activePlayerId })
                 }
               >
-                Claim Free Treasure
+                {view.ruleset.abandonedClaimPolicy === 'free_no_prep'
+                  ? 'Claim Free Treasure (Skips Reading & Prep)'
+                  : 'Claim Free Treasure'}
               </button>
               <button
                 className="btn"
@@ -876,7 +899,9 @@ export function GameTable({
                   onSendCommand({ type: 'DeclineAbandonedCard', playerId: view.activePlayerId })
                 }
               >
-                Decline to Veil &amp; Read New Card
+                {view.ruleset.abandonedClaimPolicy === 'free_no_prep'
+                  ? 'Decline to Veil & Start Normal Turn'
+                  : 'Decline to Veil & Read New Card'}
               </button>
             </div>
           </div>
@@ -1087,6 +1112,147 @@ export function GameTable({
                 </span>
                 {liveReconciliation.failureReason && (
                   <span className="brand-sub">· Click hand cards below to sacrifice</span>
+                )}
+              </div>
+            )}
+
+            {/* R1.1 Revealed-Board Elemental Intervention Mode Toggle & Targeting Bar */}
+            {canUseRevealedBoardHandElemental && (
+              <div
+                className="bonus-cta-strip"
+                data-testid="revealed-hand-mode-bar"
+                style={{ marginTop: 4 }}
+              >
+                <div className="bonus-cta-meta">
+                  <span className={`badge ${isRevealedElementalActive ? 'badge-ok' : 'badge-warn'}`}>
+                    {isRevealedElementalActive
+                      ? 'Mode: Elemental Intervention (1 action left — consumes card → Veil)'
+                      : liveReconciliation.reality === 'treasure'
+                        ? 'Optional: Intervene on Revealed Board before Claiming'
+                        : 'Mode: Sacrifice for Event (switch to intervene with Elemental Action)'}
+                  </span>
+                </div>
+                <div className="toolbar-group">
+                  <button
+                    type="button"
+                    data-testid="mode-sacrifice-btn"
+                    className={`btn btn-sm ${!isRevealedElementalActive ? 'btn-active' : ''}`}
+                    onClick={() => {
+                      setRevealedHandMode('sacrifice');
+                      onCancelElemental();
+                    }}
+                  >
+                    {liveReconciliation.reality === 'treasure'
+                      ? 'Reconcile / Claim'
+                      : 'Sacrifice Mode'}
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="mode-elemental-btn"
+                    className={`btn btn-sm ${isRevealedElementalActive ? 'btn-primary' : ''}`}
+                    onClick={() => {
+                      onClearSacrifices();
+                      setRevealedHandMode('elemental');
+                    }}
+                  >
+                    ⚡ Elemental Intervention (1 left)
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {isRevealedElementalActive && (
+              <div className="elemental-action-bar" data-testid="revealed-elemental-panel">
+                {elementalSelection.sourceKind === 'hand' && activeElement ? (
+                  <>
+                    <div className="brand-sub">
+                      <strong>
+                        {ELEMENT_META[activeElement].suitSymbol}{' '}
+                        {ELEMENT_META[activeElement].label}
+                      </strong>{' '}
+                      (using <strong>{elementalCtx.sourceCard?.shortLabel}</strong>, strength{' '}
+                      {elementalCtx.strength}): {ELEMENT_VERB_HINT[activeElement]}
+                    </div>
+                    <div className="toolbar-group">
+                      {activeElement === 'earth' &&
+                      (elementalSelection.daysSelected ||
+                        elementalSelection.boardSlots.length >= 2) ? (
+                        <button
+                          className="btn btn-primary"
+                          data-testid="start-earth-peek-btn"
+                          disabled={
+                            elementalSelection.boardSlots.length === 0
+                              ? view.daysCount < 2
+                              : elementalSelection.boardSlots.length +
+                                  (elementalSelection.daysSelected
+                                    ? Math.min(
+                                        elementalSelection.daysCount,
+                                        view.daysCount,
+                                        Math.max(
+                                          1,
+                                          elementalCtx.strength -
+                                            elementalSelection.boardSlots.length
+                                        )
+                                      )
+                                    : 0) <
+                                2
+                          }
+                          onClick={() => {
+                            const reqDays = elementalSelection.daysSelected
+                              ? Math.min(
+                                  elementalSelection.daysCount,
+                                  view.daysCount,
+                                  Math.max(
+                                    1,
+                                    elementalCtx.strength - elementalSelection.boardSlots.length
+                                  )
+                                )
+                              : 0;
+                            onSendCommand({
+                              type: 'StartEarthPeek',
+                              playerId: view.activePlayerId,
+                              sourceCardId: elementalCtx.sourceCard?.id,
+                              targetBoardSlots:
+                                elementalSelection.boardSlots.length > 0
+                                  ? elementalSelection.boardSlots
+                                  : undefined,
+                              daysCount:
+                                elementalSelection.boardSlots.length > 0 ? reqDays : undefined
+                            });
+                          }}
+                        >
+                          👁 Privately Peek &amp; Reorder
+                        </button>
+                      ) : (
+                        <button
+                          className="btn btn-primary"
+                          data-testid="confirm-revealed-elemental-btn"
+                          disabled={!cmdBuild.ok}
+                          onClick={() => {
+                            if (cmdBuild.ok) onSendCommand(cmdBuild.command);
+                          }}
+                        >
+                          {cmdBuild.ok
+                            ? `Confirm: ${cmdBuild.actionLabel}`
+                            : 'Select Revealed Board / Days / Veil Target'}
+                        </button>
+                      )}
+                      <button
+                        className="btn btn-sm"
+                        onClick={() => {
+                          onCancelElemental();
+                          setRevealedHandMode('sacrifice');
+                        }}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <div className="brand-sub">
+                    Click any card in your hand below to activate its element on the revealed Board,
+                    Immediate Future, or Veil (consumes card → Veil; 1 ordinary action/turn).
+                  </div>
                 )}
               </div>
             )}
@@ -1568,12 +1734,21 @@ export function GameTable({
                 : `${focusedPlayer.name}'s hand (${focusedPlayer.handCount}/${view.ruleset.maxHandSize})`}
             </strong>
             {canPickElementalHandCard && (
-              <span className="badge badge-ok">Playable for Elemental Action</span>
+              <span className="badge badge-ok" data-testid="hand-mode-badge">
+                {isRevealedElementalActive
+                  ? 'ELEMENTAL MODE — Click Card to Activate (→ Veil)'
+                  : 'Playable for Elemental Action'}
+              </span>
+            )}
+            {canSelectSacrifice && (
+              <span className="badge badge-warn" data-testid="hand-mode-badge">
+                SACRIFICE MODE — Click Card(s) to Pay for Obstacle
+              </span>
             )}
           </div>
           <span className="brand-sub">
             {canSelectSacrifice
-              ? 'Click cards to sacrifice for obstacle'
+              ? 'Click cards to sacrifice for obstacle (not activating elemental power)'
               : needsHandDiscard
                 ? 'Click card to discard to Veil'
                 : canPickElementalHandCard
@@ -1624,7 +1799,11 @@ export function GameTable({
                   subtitle={
                     canPickElementalHandCard && card.element
                       ? ELEMENT_SHORT_VERB[card.element]
-                      : undefined
+                      : canSelectSacrifice
+                        ? isSelectedForSac
+                          ? '✓ Sacrifice'
+                          : 'Sacrifice'
+                        : undefined
                   }
                   selected={isSelectedForSac || isSelectedForEl}
                   onClick={

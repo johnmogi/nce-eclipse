@@ -71,8 +71,17 @@ export function hasRemainingHandElementalAction(
   return getElementalActionsUsedCount(player) < limit;
 }
 
+export function canActivateHandElementalInPhase(phase: GamePhase, ruleset: Ruleset): boolean {
+  if (phase === 'AWAITING_ELEMENTAL_ACTION') return true;
+  if (phase === 'AWAITING_EVENT_RESOLUTION' && ruleset.allowRevealedBoardElemental) return true;
+  return false;
+}
+
 export function canSpendReaderBonusInPhase(phase: GamePhase, ruleset: Ruleset): boolean {
   if (phase === 'AWAITING_ELEMENTAL_ACTION') return true;
+  if (phase === 'AWAITING_EVENT_RESOLUTION' && (ruleset.readerBonusAnytimeOnTurn || ruleset.allowRevealedBoardElemental)) {
+    return true;
+  }
   if (!ruleset.readerBonusAnytimeOnTurn) return false;
   return (
     phase === 'AWAITING_ABANDONED_CHOICE' ||
@@ -289,6 +298,7 @@ function isExactIndexPermutation(length: number, candidate: readonly number[]): 
 function validateElementalPlan(params: {
   element: Element;
   strength: number;
+  phase: GamePhase;
   payload: ElementalEffectPayload;
   excludedVeilCardId: string | null;
   days: readonly string[];
@@ -297,7 +307,7 @@ function validateElementalPlan(params: {
   boardCenter: readonly string[];
   boardParallel: readonly string[];
 }): { ok: true; plan: ValidatedPlan } | { ok: false; error: ValidationError } {
-  const { element, strength, payload, excludedVeilCardId, days, veil, boardEvent, boardCenter, boardParallel } = params;
+  const { element, strength, phase, payload, excludedVeilCardId, days, veil, boardEvent, boardCenter, boardParallel } = params;
 
   if (element === 'water') {
     if (payload.targetZone !== 'veil') {
@@ -413,6 +423,22 @@ function validateElementalPlan(params: {
           }
         };
       }
+      if (
+        phase === 'AWAITING_EVENT_RESOLUTION' &&
+        element === 'fire' &&
+        boardSlots.includes('event') &&
+        !boardSlots.includes('center') &&
+        days.length < 1
+      ) {
+        return {
+          ok: false,
+          error: {
+            code: 'INSUFFICIENT_TARGET_CARDS',
+            message:
+              'Cannot burn the revealed Left Event without at least 1 card remaining in Deck of Days to draw a replacement Event.'
+          }
+        };
+      }
       return {
         ok: true,
         plan: { kind: element, boardSlots, daysCount: 0 }
@@ -494,6 +520,22 @@ function validateElementalPlan(params: {
         error: {
           code: 'INSUFFICIENT_TARGET_CARDS',
           message: `Deck of Days only has ${days.length} card(s), fewer than requested ${requestedDays}.`
+        }
+      };
+    }
+    if (
+      phase === 'AWAITING_EVENT_RESOLUTION' &&
+      element === 'fire' &&
+      boardSlots.includes('event') &&
+      !boardSlots.includes('center') &&
+      days.length - requestedDays < 1
+    ) {
+      return {
+        ok: false,
+        error: {
+          code: 'INSUFFICIENT_TARGET_CARDS',
+          message:
+            'Cannot burn the revealed Left Event and all remaining Days cards — at least 1 card must remain in Days for a replacement Event.'
         }
       };
     }
@@ -646,6 +688,32 @@ function validateElementalPlan(params: {
             message: `Select 1..${strength} occupied Board slot(s) to reposition to Days.`
           }
         };
+      }
+      if (
+        phase === 'AWAITING_EVENT_RESOLUTION' &&
+        boardSlots.includes('event') &&
+        !boardSlots.includes('center')
+      ) {
+        if (payload.placement === 'top') {
+          return {
+            ok: false,
+            error: {
+              code: 'INVALID_REORDER_SPEC',
+              message:
+                'Cannot place the revealed Left Event on top of Deck of Days during encounter (it would immediately redraw itself); place on bottom instead.'
+            }
+          };
+        }
+        if (days.length < 1) {
+          return {
+            ok: false,
+            error: {
+              code: 'INSUFFICIENT_TARGET_CARDS',
+              message:
+                'Deck of Days needs at least 1 card to draw a replacement Left Event.'
+            }
+          };
+        }
       }
       return {
         ok: true,
@@ -1122,12 +1190,12 @@ function executeValidatedPlan(
     plan.boardSlots.forEach((slot, idx) => {
       if (slot === 'event') {
         ctx.boardEvent = [newBoardCards[idx]!];
-        ctx.eventRevealed = false;
+        ctx.eventRevealed = ctx.phase === 'AWAITING_EVENT_RESOLUTION' || isMajorCard(cards[newBoardCards[idx]!]);
       } else if (slot === 'parallel') {
         ctx.boardParallel = [newBoardCards[idx]!];
       } else {
         ctx.boardCenter = [newBoardCards[idx]!];
-        ctx.centerRevealed = false;
+        ctx.centerRevealed = ctx.phase === 'AWAITING_EVENT_RESOLUTION' || isMajorCard(cards[newBoardCards[idx]!]);
         ctx.centerAbandoned = false;
         ctx.abandonedByPlayerId = null;
       }
@@ -1209,12 +1277,14 @@ export function validateAndExecuteElementalEffect(
     };
   }
 
-  if (ctx.phase !== 'AWAITING_ELEMENTAL_ACTION') {
+  if (!canActivateHandElementalInPhase(ctx.phase, ctx.ruleset)) {
     return {
       ok: false,
       error: {
         code: 'INVALID_PHASE',
-        message: `Elemental hand effects can only be activated during AWAITING_ELEMENTAL_ACTION (current: ${ctx.phase}).`
+        message: ctx.ruleset.allowRevealedBoardElemental
+          ? `Elemental hand effects can only be activated during Pre-Reading Prep or Revealed-Board Encounter (current: ${ctx.phase}).`
+          : `Elemental hand effects can only be activated during AWAITING_ELEMENTAL_ACTION (current: ${ctx.phase}).`
       }
     };
   }
@@ -1260,6 +1330,7 @@ export function validateAndExecuteElementalEffect(
   const planRes = validateElementalPlan({
     element: command.element,
     strength,
+    phase: ctx.phase,
     payload: command,
     excludedVeilCardId: command.sourceCardId,
     days: ctx.days,
@@ -1422,6 +1493,7 @@ export function validateAndExecuteReaderBonus(
   const planRes = validateElementalPlan({
     element: bonus.sourceElement,
     strength,
+    phase: ctx.phase,
     payload: command,
     excludedVeilCardId: null,
     days: ctx.days,

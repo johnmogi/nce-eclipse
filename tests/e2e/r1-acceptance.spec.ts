@@ -231,4 +231,58 @@ test.describe('Stage R1 — Real Browser Acceptance Walkthrough (Human vs Bot)',
       .locator('select');
     await expect(chainingSelect).toHaveValue('1');
   });
+
+  test('Walkthrough E (R1.1 Revealed-Board Elemental Intervention on eclipse-me-001): Sacrifice vs Elemental mode toggle, Fire replaces revealed Trial with real replacement Event, enforces 1 action/turn cap', async ({
+    page
+  }) => {
+    await page.goto('/');
+
+    // Default seed eclipse-me-001: P1 holds 4♣, 2♦, 3♥; Turn 1 Center = 9♣, Event = 2♠ (Trial)
+    await expect(page.locator('input[placeholder="custom seed"]')).toHaveValue('eclipse-me-001');
+    await page.getByTestId('proceed-to-reading-btn').click();
+    await expect(page.getByTestId('accept-center-btn')).toBeVisible({ timeout: 10_000 });
+
+    // Pursue -> Center (9♣) + Left Event (2♠ Trial) flip face-up!
+    await page.getByTestId('accept-center-btn').click();
+    await expect(page.getByTestId('revealed-hand-mode-bar')).toBeVisible();
+    await expect(page.getByTestId('hand-mode-badge')).toContainText('SACRIFICE MODE');
+
+    // Switch clearly to Elemental Intervention mode -> badge flips to ELEMENTAL MODE!
+    await page.getByTestId('mode-elemental-btn').click();
+    await expect(page.getByTestId('hand-mode-badge')).toContainText('ELEMENTAL MODE');
+
+    // Activate 4♣ (Fire) on revealed Left Event (2♠) -> burns 2♠ and flips a real replacement Event!
+    await page.locator('.hand-cards-grid .card-chip', { hasText: '4♣' }).click();
+    await page.locator('.board-slot-card', { hasText: 'Event' }).click();
+    const confirmFire = page.getByTestId('confirm-revealed-elemental-btn');
+    await expect(confirmFire).toBeEnabled();
+    await confirmFire.click();
+
+    // Replacement Event flipped (not an automatic free claim), Veil now holds 4♣ + 2♠ (2 cards),
+    // and 1-ordinary-action-per-turn cap hides the Elemental Intervention toggle!
+    await expect(page.getByTestId('veil-zone')).toContainText('2 cards');
+    await expect(page.getByTestId('resolve-event-btn')).toBeVisible();
+    await expect(page.getByTestId('mode-elemental-btn')).toHaveCount(0);
+  });
+
+  test('Walkthrough F (R1.1 AB-1 Abandonment & Bot Evaluation on eclipse-me-001): abandoning off-color 3♦ no longer loses Turn 2 Human Reading because Bot declines unhelpful card', async ({
+    page
+  }) => {
+    await page.goto('/');
+
+    await expect(page.locator('input[placeholder="custom seed"]')).toHaveValue('eclipse-me-001');
+    await page.getByTestId('proceed-to-reading-btn').click();
+    await expect(page.getByTestId('reject-center-btn')).toBeVisible({ timeout: 10_000 });
+
+    // Reject 9♣ -> replacement 3♦ (off-color for Fire Bot!) vs 2♠ Trial -> Abandon 3♦ -> Finish Turn 1
+    await page.getByTestId('reject-center-btn').click();
+    await page.getByRole('button', { name: 'Leave for Next Player' }).click();
+    await expect(page.getByTestId('end-turn-btn')).toBeVisible();
+    await page.getByTestId('end-turn-btn').click();
+
+    // Turn 2: Bot evaluates 3♦ (unhelpful off-color) -> declines to Veil -> takes normal turn -> prompts Human to offer Turn 2 Reading!
+    await expect(page.getByRole('button', { name: 'Advise: GOOD' })).toBeVisible({ timeout: 12_000 });
+    await expect(page.getByRole('button', { name: 'Advise: BAD' })).toBeVisible();
+    await expect(page.getByText('Round 1 · Turn 2')).toBeVisible();
+  });
 });

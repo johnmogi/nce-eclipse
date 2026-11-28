@@ -1,4 +1,5 @@
 import {
+  canActivateHandElementalInPhase,
   canSpendReaderBonusInPhase,
   getAvailableReaderBonusesForTurn,
   getElementalActionsUsedCount,
@@ -83,7 +84,31 @@ export function getLegalActionsForState(state: GameState, viewer: Viewer): Comma
       const eventId = state.board.event[0];
       const eventCard = eventId ? state.cards[eventId] : undefined;
       const reality = eventCard ? eventCardToReality(eventCard) : 'treasure';
-      return reality === 'treasure' ? ['ResolveEvent'] : ['ResolveEvent', 'AbandonCenter'];
+      const actions: Command['type'][] =
+        reality === 'treasure' ? ['ResolveEvent'] : ['ResolveEvent', 'AbandonCenter'];
+      if (
+        activePlayer &&
+        state.ruleset.features.elementalEffects &&
+        canActivateHandElementalInPhase(state.phase, state.ruleset)
+      ) {
+        const boardOccupied =
+          state.board.event.length + state.board.center.length + state.board.parallel.length;
+        if (
+          hasRemainingHandElementalAction(activePlayer, state.ruleset) &&
+          activePlayer.hand.length > 0
+        ) {
+          actions.push('UseElementalEffect');
+          if (
+            (state.days.length >= 2 ||
+              boardOccupied >= 2 ||
+              (boardOccupied >= 1 && state.days.length >= 1)) &&
+            activePlayer.hand.some((id) => state.cards[id]?.element === 'earth')
+          ) {
+            actions.push('StartEarthPeek');
+          }
+        }
+      }
+      return appendAnytimeReaderBonus(actions);
     }
     case 'AWAITING_CENTER_DECISION':
       return state.board.center.length > 0 ? ['ClaimCenterCard', 'DiscardCenterCard'] : ['EndTurn'];
